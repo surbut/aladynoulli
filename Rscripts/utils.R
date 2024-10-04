@@ -313,9 +313,9 @@ mcmc_sampler_softmax <- function(y, g_i, n_iterations, initial_values) {
     samples$Phi[iter, , , ] <- current_state$Phi
     samples$Gamma[iter, , ] <- current_state$Gamma
     
-    log_likelihoods[iter] <- current_log_lik
-    log_posteriors[iter] <- current_log_lik + current_log_prior_lambda + current_log_prior_phi +
-      sum(dnorm(current_state$Gamma, 0, 1, log = TRUE))
+   
+    log_posteriors[iter] <- log-sum-exp(c(current_log_lik + current_log_prior_lambda + current_log_prior_phi +
+      sum(dnorm(current_state$Gamma, 0, 1, log = TRUE))))
     
     cat("current_log_lik:", current_log_lik, "\n")
     cat("current_log_prior_lambda:",
