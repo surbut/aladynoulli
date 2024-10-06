@@ -54,6 +54,27 @@ log_gp_prior_vec <- function(eta, mean, K_inv, log_det_K) {
 }
 
 
+elliptical_slice <- function(x, prior_mean, prior_cov, log_likelihood_fn) {
+  nu <- mvrnorm(1, prior_mean, prior_cov)
+  log_y <- log_likelihood_fn(x, ...) + log(runif(1))
+  theta <- runif(1, 0, 2*pi)
+  theta_min <- theta - 2*pi
+  theta_max <- theta
+  
+  while (TRUE) {
+    proposal <- x * cos(theta) + nu * sin(theta)
+    if (log_likelihood_fn(proposal, ...) > log_y) {
+      return(proposal)
+    }
+    if (theta < 0) {
+      theta_min <- theta
+    } else {
+      theta_max <- theta
+    }
+    theta <- runif(1, theta_min, theta_max)
+  }
+}
+
 
 logistic <- function(x) {
   return(1 / (1 + exp(-x)))
@@ -241,6 +262,21 @@ mcmc_sampler_softmax <- function(y, g_i, n_iterations, initial_values) {
       adapt_sd$Lambda <- adapt_sd$Lambda * 0.99
     }
     
+    
+    ## if we choose ellipitival slice sampling
+    for (i in 1:n_individuals) {
+      for (k in 1:n_topics) {
+        prior_mean <- rep(g_i[i, ] %*% current_state$Gamma[k, ], T)
+        prior_cov <- solve(K_inv_lambda[[k]]$K_inv)
+        current_state$Lambda[i, k, ] <- elliptical_slice(
+          current_state$Lambda[i, k, ],
+          prior_mean,
+          prior_cov,
+          function(x) log_likelihood(y, update_lambda(current_state$Lambda, i, k, x), current_state$Phi)
+        )
+      }
+    }
+    
     # Update Phi
     proposed_Phi <- current_state$Phi + array(rnorm(prod(dim(
       current_state$Phi
@@ -284,6 +320,20 @@ mcmc_sampler_softmax <- function(y, g_i, n_iterations, initial_values) {
       adapt_sd$Phi <- adapt_sd$Phi * 0.99
     }
     
+    ### elliptical slice for gamma
+for (k in 1:n_topics) {
+      for (d in 1:n_diseases) {
+        prior_mean <- current_state$mu_d[d, ]
+        prior_cov <- solve(K_inv_phi[[k]]$K_inv)
+        current_state$Phi[k, d, ] <- elliptical_slice(
+          current_state$Phi[k, d, ],
+          prior_mean,
+          prior_cov,
+          function(x) log_likelihood(y, current_state$Lambda, update_phi(current_state$Phi, k, d, x))
+        )
+      }
+    }
+    
     # Update Gamma using Gibbs sampler
     for (k in 1:n_topics) {
       Lambda_k <- current_state$Lambda[, k, ]  # N x T matrix for topic k
@@ -313,8 +363,8 @@ mcmc_sampler_softmax <- function(y, g_i, n_iterations, initial_values) {
     samples$Phi[iter, , , ] <- current_state$Phi
     samples$Gamma[iter, , ] <- current_state$Gamma
     
-   
-    log_posteriors[iter] <- log-sum-exp(c(current_log_lik + current_log_prior_lambda + current_log_prior_phi +
+    log_likelihoods[iter] <- current_log_lik
+    log_posteriors[iter] <- log_sum_exp(c(current_log_lik + current_log_prior_lambda + current_log_prior_phi +
       sum(dnorm(current_state$Gamma, 0, 1, log = TRUE))))
     
     cat("current_log_lik:", current_log_lik, "\n")
