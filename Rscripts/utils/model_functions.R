@@ -39,7 +39,7 @@ precompute_K_inv <- function(T, length_scale, var_scale) {
   Kern <- Kern + diag(1e-6, T)  # Add small jitter for numerical stability
   K_inv <- solve(Kern)
   log_det_K <- determinant(Kern, logarithm = TRUE)$modulus
-  cat("K_inv diagonal:", diag(K_inv)[1:5], "log_det_K:", log_det_K, "\n")  # Add this line
+  #cat("K_inv diagonal:", diag(K_inv)[1:5], "log_det_K:", log_det_K, "\n")  # Add this line
   return(list(K_inv = K_inv, log_det_K = log_det_K))
 }
 
@@ -48,7 +48,7 @@ log_gp_prior_vec <- function(eta, mean, K_inv, log_det_K) {
   centered_eta <- eta - mean
   quad_form <- sum(centered_eta * (K_inv %*% centered_eta))
   log_prior <- -0.5 * (log_det_K + quad_form + T * log(2 * pi))
-  cat("log_det_K:", log_det_K, "quad_form:", quad_form, "T:", T, "log_prior:", log_prior, "\n")
+  #cat("log_det_K:", log_det_K, "quad_form:", quad_form, "T:", T, "log_prior:", log_prior, "\n")
   return(log_prior)
 }
 
