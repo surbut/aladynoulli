@@ -1,6 +1,5 @@
-# Corrected elliptical slice sampling function
-elliptical_slice <- function(x, prior_mean, prior_cov, log_likelihood_fn, fn_args) {
-  nu <- mvrnorm(1, prior_mean, prior_cov)
+elliptical_slice <- function(x, prior_mean, K, log_likelihood_fn, fn_args) {
+  nu <- as.vector(rmvn(1, prior_mean, K))
   log_y <- log_likelihood_fn(x, fn_args) + log(runif(1))
   theta <- runif(1, 0, 2*pi)
   theta_min <- theta - 2*pi

@@ -2,6 +2,23 @@
 library(MASS)
 
 
+
+compute_kernel_matrix <- function(T, length_scale, var_scale) {
+  time_diff_matrix <- outer(1:T, 1:T, "-")^2
+  K <- var_scale * exp(-0.5 * time_diff_matrix / length_scale^2)
+  K + diag(1e-6, T)  # Add small jitter for numerical stability
+}
+
+# Function to sample from multivariate normal
+rmvn <- function(n, mu, K) {
+  p <- length(mu)
+  Z <- matrix(rnorm(n*p), nrow=n, ncol=p)
+  L <- chol(K)
+  X <- Z %*% L
+  X + rep(mu, each=n)
+}
+
+
 # Helper Functions
 rbf_kernel <- function(t1, t2, length_scale, variance) {
   return(variance * exp(-0.5 * (t1 - t2)^2 / length_scale^2))

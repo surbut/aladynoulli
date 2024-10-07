@@ -1,3 +1,13 @@
+# New direct version of log_gp_prior
+log_gp_prior_direct <- function(eta, mean, K) {
+  centered_eta <- eta - mean
+  log_det_K <- determinant(K, logarithm = TRUE)$modulus
+  quad_form <- t(centered_eta) %*% solve(K, centered_eta)
+  log_prior <- -0.5 * (log_det_K + as.numeric(quad_form) + length(eta) * log(2 * pi))
+  return(as.numeric(log_prior))
+}
+
+# Updated MCMC sampler
 mcmc_sampler_elliptical <- function(y, g_i, n_iterations, initial_values) {
   current_state <- initial_values
   n_individuals <- dim(current_state$Lambda)[1]
@@ -12,33 +22,52 @@ mcmc_sampler_elliptical <- function(y, g_i, n_iterations, initial_values) {
     Phi = array(0, dim = c(n_iterations, dim(current_state$Phi))),
     Gamma = array(0, dim = c(n_iterations, dim(current_state$Gamma)))
   )
+  
+  print(iter)
+  
   log_likelihoods <- numeric(n_iterations)
   log_posteriors <- numeric(n_iterations)
   
+  # Compute kernel matrices
+  K_lambda <- lapply(1:n_topics, function(k)
+    compute_kernel_matrix(
+      T,
+      current_state$length_scales_lambda[k],
+      current_state$var_scales_lambda[k]
+    ))
+  K_phi <- lapply(1:n_topics, function(k)
+    compute_kernel_matrix(
+      T,
+      current_state$length_scales_phi[k],
+      current_state$var_scales_phi[k]
+    ))
+  
+  # Compute inverse and log determinant for existing log_gp_prior_vec
   # Precompute inverse covariance matrices
+  
   K_inv_lambda <- lapply(1:n_topics, function(k)
     precompute_K_inv(
       T,
       current_state$length_scales_lambda[k],
       current_state$var_scales_lambda[k]
     ))
+  
   K_inv_phi <- lapply(1:n_topics, function(k)
     precompute_K_inv(
       T,
       current_state$length_scales_phi[k],
       current_state$var_scales_phi[k]
     ))
-  
+
   for (iter in 1:n_iterations) {
     # Update Lambda using elliptical slice sampling
     for (i in 1:n_individuals) {
       for (k in 1:n_topics) {
         prior_mean <- rep(g_i[i, ] %*% current_state$Gamma[k, ], T)
-        prior_cov <- solve(K_inv_lambda[[k]]$K_inv)
         current_state$Lambda[i, k, ] <- elliptical_slice(
           current_state$Lambda[i, k, ],
           prior_mean,
-          prior_cov,
+          K_lambda[[k]],
           function(x, args) log_likelihood(args$y, update_lambda(args$Lambda, args$i, args$k, x), args$Phi),
           list(y = y, Lambda = current_state$Lambda, Phi = current_state$Phi, i = i, k = k)
         )
@@ -49,11 +78,10 @@ mcmc_sampler_elliptical <- function(y, g_i, n_iterations, initial_values) {
     for (k in 1:n_topics) {
       for (d in 1:n_diseases) {
         prior_mean <- current_state$mu_d[d, ]
-        prior_cov <- solve(K_inv_phi[[k]]$K_inv)
         current_state$Phi[k, d, ] <- elliptical_slice(
           current_state$Phi[k, d, ],
           prior_mean,
-          prior_cov,
+          K_phi[[k]],
           function(x, args) log_likelihood(args$y, args$Lambda, update_phi(args$Phi, args$k, args$d, x)),
           list(y = y, Lambda = current_state$Lambda, Phi = current_state$Phi, k = k, d = d)
         )
@@ -63,7 +91,7 @@ mcmc_sampler_elliptical <- function(y, g_i, n_iterations, initial_values) {
     # Update Gamma using Gibbs sampling
     for (k in 1:n_topics) {
       Lambda_k <- current_state$Lambda[, k, ]  # N x T matrix for topic k
-      K_inv <- K_inv_lambda[[k]]$K_inv  # T x T inverse covariance matrix
+      K_inv <- K_inv_lambda[[k]]
       
       posterior_precision <- diag(1, P)  # Prior precision (assuming standard normal prior)
       posterior_mean <- rep(0, P)  # Prior mean
@@ -78,7 +106,7 @@ mcmc_sampler_elliptical <- function(y, g_i, n_iterations, initial_values) {
       posterior_covariance <- solve(posterior_precision)
       posterior_mean <- posterior_covariance %*% posterior_mean
       
-      current_state$Gamma[k, ] <- mvrnorm(1, mu = posterior_mean, Sigma = posterior_covariance)
+      current_state$Gamma[k, ] <- rmvn(1, posterior_mean, posterior_covariance)
     }
     
     # Store samples and diagnostics
@@ -88,8 +116,8 @@ mcmc_sampler_elliptical <- function(y, g_i, n_iterations, initial_values) {
     
     log_likelihoods[iter] <- log_likelihood(y, current_state$Lambda, current_state$Phi)
     
-    # Calculate log posterior
-    log_prior_lambda <- sum(sapply(1:n_individuals, function(i) {
+    # Calculate log posterior using both methods
+   log_prior_lambda <- log_sum_exp(unlist(sapply(1:n_individuals, function(i) {
       sapply(1:n_topics, function(k) {
         log_gp_prior_vec(
           current_state$Lambda[i, k, ],
@@ -98,28 +126,34 @@ mcmc_sampler_elliptical <- function(y, g_i, n_iterations, initial_values) {
           K_inv_lambda[[k]]$log_det_K
         )
       })
-    }))
+    })))
     
-    log_prior_phi <- sum(sapply(1:n_topics, function(k) {
-      sapply(1:n_diseases, function(d) {
-        log_gp_prior_vec(
-          current_state$Phi[k, d, ],
-          current_state$mu_d[d, ],
-          K_inv_phi[[k]]$K_inv,
-          K_inv_phi[[k]]$log_det_K
-        )
-      })
-    }))
+   log_prior_phi <- log_sum_exp(unlist(sapply(1:n_topics, function(k) {
+     sapply(1:n_diseases, function(d) {
+       log_gp_prior_vec(
+         current_state$Phi[k, d, ],
+         current_state$mu_d[d, ],
+         K_inv_phi[[k]]$K_inv,
+         K_inv_phi[[k]]$log_det_K
+       )
+     })
+   })))
     
-    log_prior_gamma <- sum(dnorm(current_state$Gamma, 0, 1, log = TRUE))
-    
+  
+
     log_posteriors[iter] <- log_likelihoods[iter] + log_prior_lambda + log_prior_phi + log_prior_gamma
     
-    # Print progress
-    if (iter %% 100 == 0) {
+    log_posteriors[iter] <- log_sum_exp(c(current_log_lik + log_prior_lambda + log_prior_phi +
+                                            log_prior_gamma))
+    # Print progress and compare methods
+    if (iter %% 1 == 0) {
       cat("Iteration", iter, "of", n_iterations, "\n")
       cat("Log posterior:", log_posteriors[iter], "\n")
       cat("Log likelihood:", log_likelihoods[iter], "\n")
+      cat("Log prior Lambda (original):", log_prior_lambda, "\n")
+      cat("Log prior Lambda (direct):", log_prior_lambda_direct, "\n")
+      cat("Log prior Phi (original):", log_prior_phi, "\n")
+      cat("Log prior Phi (direct):", log_prior_phi_direct, "\n")
     }
   }
   

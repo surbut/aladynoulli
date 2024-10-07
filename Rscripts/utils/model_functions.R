@@ -53,6 +53,15 @@ log_gp_prior_vec <- function(eta, mean, K_inv, log_det_K) {
 }
 
 
+# Version using kernel matrix directly
+log_gp_prior_vec_direct <- function(eta, mean, K) {
+  centered_eta <- eta - mean
+  log_det_K <- determinant(K, logarithm = TRUE)$modulus
+  quad_form <- t(centered_eta) %*% solve(K, centered_eta)
+  log_prior <- -0.5 * (log_det_K + as.numeric(quad_form) + length(eta) * log(2 * pi))
+  return(as.numeric(log_prior))
+}
+
 update_phi <- function(Phi, k, d, new_values) {
   Phi_copy <- Phi
   Phi_copy[k, d, ] <- new_values
