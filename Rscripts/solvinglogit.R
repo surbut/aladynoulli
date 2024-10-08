@@ -18,6 +18,6 @@ T <- dim(y)[3]
 
 initial_values <- initialize_mcmc(y, g_i, n_topics, n_diseases, T,var_scales_phi = var_scales_phi,length_scales_lambda = length_scales_lambda,length_scales_phi = length_scales_phi,var_scales_lambda = var_scales_lambda,sigsmall = 0.01)
 
-n_iterations <- 1000
-#samples <- mcmc_sampler_elliptical(y, g_i, n_iterations, initial_values)
+n_iterations <- 100
+samples <- mcmc_sampler_elliptical(y, g_i, n_iterations, initial_values)
 samples <- mcmc_sampler_softmax(y, g_i, n_iterations, initial_values)
