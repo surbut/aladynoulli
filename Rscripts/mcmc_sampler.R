@@ -1,5 +1,6 @@
 # mcmc_sampler
-
+### TO DO:
+## Update one component at a time, 
 
 mcmc_sampler_softmax <- function(y, g_i, n_iterations, initial_values) {
   current_state <- initial_values
@@ -49,6 +50,16 @@ mcmc_sampler_softmax <- function(y, g_i, n_iterations, initial_values) {
       current_state$Lambda
     )), 0, adapt_sd$Lambda),
     dim = dim(current_state$Lambda))
+    
+    ## update lambda one component at a time
+    ## create a function called 'update lambda', the number of metropolis steps you take should be either equal to 
+    ## the number of individuals x K: for each vector you propose, accept or reject it,
+    ## right way to do it is with the variance covariance matrix of the proposal (Roberts/Rosenthal 2009)
+    ## the other way is to update all the components at once, but this is not the right way to do it
+    ## update vectors, each one at a time 
+    ## update the whole matrix at once using the covariance matrix of the chain, 
+    ## multipling by 2.38^2, related to diffusion processes, way to get the optimal accept/reject ratio
+    
     
     current_log_lik <- log_likelihood(y, current_state$Lambda, current_state$Phi)
     proposed_log_lik <- log_likelihood(y, proposed_Lambda, current_state$Phi)
@@ -140,7 +151,7 @@ mcmc_sampler_softmax <- function(y, g_i, n_iterations, initial_values) {
       K_inv <- K_inv_lambda[[k]]$K_inv  # T x T inverse covariance matrix
       
       # Compute posterior precision (inverse covariance), see standard MVN derivatino using design matrix on X instead of N
-      posterior_precision <- diag(1, P)  # Prior precision (assuming standard normal prior)
+      posterior_precision <- diag(1, P)  # Prior precision (assuming standard normal prior, because we're asumming gamma_kp is N(0,1)
       posterior_mean <- rep(0, P)  # Prior mean
       
       for (i in 1:N) {
