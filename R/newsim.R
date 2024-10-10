@@ -56,7 +56,7 @@ generate_tensor_data <- function(N = 1000, D = 5, T = 50, K = 3, num_covariates 
   eta <- plogis(phi_kd)
   
   # Generate pi and Y
-  pi <- einsum('nkt,kdt->ndt', s, eta)
+  pi <- einsum('nkt,kdt->ndt', theta, eta)
   Y <- array(rbinom(n = N*D*T, size = 1, prob = pi), dim = c(N, D, T))
   
   # Return all generated data and parameters
