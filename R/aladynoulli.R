@@ -32,6 +32,9 @@ aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin){
 }
 
 
+# Try to update a matrix by looping through individuals instead of proposing 
+# the full array. Lambda[i, , ]
+# try to have smoothed proposals. 
 update_Lambda <- function(Y, Lambda, G, Gamma, s = 0.01){
   
   n_individuals <- dim(Lambda)[1]
@@ -44,7 +47,8 @@ update_Lambda <- function(Y, Lambda, G, Gamma, s = 0.01){
     #setTxtProgressBar(pb, i/n_individuals)
     for(k in 1:n_topics){
       # Sample Lambda from past value
-      lambda_new <- c(rmvnorm(1, Lambda[i, k, ], sigma = s * diag(Ttot)))
+      lambda_new <- c(rmvnorm(1, Lambda[i, k, ], sigma = ))
+      #lambda_new <- rnorm(Ttot) + 1
       # Evaluate log posterior
       Lambda_new <- Lambda
       Lambda_new[i, k, ] <- lambda_new
@@ -72,6 +76,7 @@ for(t in 1:Ttot){
   for(k in 1:n_topics){
     # Sample Lambda from past value
     lambda_new <- c(rmvnorm(1, Lambda[, k, t], sigma = s * diag(n_individuals)))
+    lambda_new <- rnorm(n_individuals)
     # Evaluate log posterior
     Lambda_new <- Lambda
     Lambda_new[, k, t] <- lambda_new
@@ -95,10 +100,14 @@ for(t in 1:Ttot){
   
 
 
+data <- generate_tensor_data()
+
+Y <- data$Y
+G <- data$G
 
 
 
-
+pi <- 
 
 
 
