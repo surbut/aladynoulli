@@ -9,7 +9,7 @@ aladynoulli <- function(y, G, n_topics = 3, nsamples, nburnin){
   
   # Matrix of indexed to ignore. 
   # Create a matrix of the indexes for the time-to-event for each patient-disease
-  at_risk <- which(cumsum(y[i, d, ]) == 0)
+  at_risk <- precompute_likelihood_indices(Y)
   
   # Here you initialize the MCMC
   initial_values <- initialize_mcmc(y, 

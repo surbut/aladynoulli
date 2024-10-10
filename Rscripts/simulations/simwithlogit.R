@@ -109,11 +109,13 @@ for (k in 1:K) {
                       2)
   #image(cov_matrix)
   for (d in 1:D) {
-    phi_kd[k, d, ] <- plogis(mvrnorm(1, mu = mu_d[d,], Sigma = cov_matrix))
+    phi_kd[k, d, ] <- mvrnorm(1, mu = mu_d[d,], Sigma = cov_matrix)
+    
   }
   image(phi_kd[k,,])
 }
 
+eta=plogis(phi_kd)
 
 par(mfrow = c(2, 2))
 for (d in 1:D) {
@@ -138,35 +140,25 @@ for (k in 1:K) {
 }
 ###
 
-y = array(0, dim = c(N, D, T))
-pi_values = array(NA, dim = c(N, D, T))
 
-# Simulate data
-for (i in 1:N) {
-  for (d in 1:D) {
-    for (t in 1:T) {
-      if (sum(y[i, d, 1:t]) == 0) {
-        # Disease hasn't occurred yet
-        
-        pi_idt <- sum(diag(s[,i , t] %*% t(phi_kd[, d, t])))
-        
-        pi_values[i, d, t] <- pi_idt  # Store the pi_idt value
-        
-        # Simulate diagnosis
-        y[i, d, t] <- rbinom(1, 1, pi_idt)
-      } else {
-        break  # Stop once disease is diagnosed
-      }
-    }
-  }
-}
 
+library(einsum)
+pi <- einsum('knt,kdt->ndt', s, eta)
+N <- dim(pi)[1]
+D <- dim(pi)[2]
+T <- dim(pi)[3]
+
+# Create an array to store the results
+Y <- array(0, dim = c(N, D, T))
+
+# Fill the array with Bernoulli draws
+Y[] <- rbinom(n = N*D*T, size = 1, prob = pi)
 
 
 par(mfrow = c(2, 2))
 for (i in sample(1:N, 4)) {
   matplot(
-    t(pi_values[i, , ]),
+    t(pi[i, , ]),
     type = 'l',
     main = paste("Pi for individual", i),
     xlab = "Time",
@@ -217,7 +209,7 @@ image(K, main = "Toeplitz Matrix (K)", col = terrain.colors(100))
 image(K_inv, main = "Inverse Toeplitz Matrix (K_inv)", col = terrain.colors(100))
 
 # Assuming Y is your original tensor from the simulation
-Y=y
+
 N <- dim(Y)[1]
 D <- dim(Y)[2]
 T <- dim(Y)[3]

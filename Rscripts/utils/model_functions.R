@@ -1,36 +1,70 @@
 ## model specific functions
 
-# Log-likelihood function
-log_likelihood <- function(y, Lambda, Phi) {
+# Precompute indices function, run only once
+precompute_likelihood_indices <- function(Y) {
+  n_individuals <- dim(Y)[1]
+  n_diseases <- dim(Y)[2]
+  Ttot <- dim(Y)[3]
+  
+  # Initialize lists to store indices
+  event_indices <- list()
+  at_risk_indices <- list()
+  
+  for (i in 1:n_individuals) {
+    for (d in 1:n_diseases) {
+      event_time <- which(Y[i, d, ] == 1)[1]  # Take only the first (and only) event time
+      if (!is.na(event_time)) {
+        # Add the event time
+        event_indices <- c(event_indices, list(c(i, d, event_time)))
+        
+        # Add at-risk times up to the event
+        if (event_time > 1) {
+          at_risk_indices <- c(at_risk_indices, list(cbind(i, d, 1:(event_time-1))))
+        }
+      } else {
+        # If no event, consider at risk for all time points
+        at_risk_indices <- c(at_risk_indices, list(cbind(i, d, 1:Ttot)))
+      }
+    }
+  }
+  
+  list(event_indices = do.call(rbind, event_indices),
+       at_risk_indices = do.call(rbind, at_risk_indices))
+}
+
+
+# Updated log-likelihood function
+compute_log_likelihood <- function(Lambda, Phi, precomputed_indices) {
   n_individuals <- dim(Lambda)[1]
   n_topics <- dim(Lambda)[2]
   n_diseases <- dim(Phi)[2]
   Ttot <- dim(Lambda)[3]
   
-  theta <- apply_softmax_to_lambda(Lambda) # Apply softmax to Lambda
-  pi <- array(0, dim = c(n_individuals, n_diseases, Ttot))
+  theta <- apply_softmax_to_lambda(Lambda)
+  eta <- plogis(Phi)  # logistic function
+  pi <- einsum::einsum("nkt,kdt->ndt", theta, eta)
   
-  for (t in 1:Ttot) {
-    pi[, , t] <- theta[, , t] %*% logistic(Phi[, , t])
-  }
+  event_indices <- precomputed_indices$event_indices
+  at_risk_indices <- precomputed_indices$at_risk_indices
   
   log_lik <- 0
-  for (i in 1:n_individuals) {
-    for (d in 1:n_diseases) {
-      at_risk <- which(cumsum(y[i, d, ]) == 0) # <--- Major time waste
-      if (length(at_risk) > 0) {
-        event_time <- max(at_risk) + 1
-        if (event_time <= Ttot) {
-          log_lik <- log_lik + log(pi[i, d, event_time])
-        }
-        log_lik <- log_lik + sum(log(1 - pi[i, d, at_risk]))
-      } else {
-        log_lik <- log_lik + log(pi[i, d, 1])
-      }
-    }
+  
+  # Handle events, including those at time 1
+  if (nrow(event_indices) > 0) {
+    log_lik <- log_lik + sum(log(pi[event_indices]))
   }
+  
+  # Handle at-risk periods
+  if (nrow(at_risk_indices) > 0) {
+    log_lik <- log_lik + sum(log(1 - pi[at_risk_indices]))
+  }
+  
   return(log_lik)
 }
+
+
+
+
 
 
 precompute_K_inv <- function(T, length_scale, var_scale) {
