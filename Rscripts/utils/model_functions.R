@@ -65,8 +65,6 @@ compute_log_likelihood <- function(Lambda, Phi, precomputed_indices) {
 
 
 
-
-
 precompute_K_inv <- function(T, length_scale, var_scale) {
   time_diff_matrix <- outer(1:T, 1:T, "-")^2
   Kern <- var_scale * exp(-0.5 * time_diff_matrix / length_scale^2)
@@ -81,7 +79,7 @@ log_gp_prior_vec <- function(eta, mean, K_inv, log_det_K) {
   T <- length(eta)
   centered_eta <- eta - mean
   quad_form <- sum(centered_eta * (K_inv %*% centered_eta))
-  log_prior <- -0.5 * (log_det_K + quad_form + T * log(2 * pi))
+  log_prior <- -0.5 * (log_det_K + quad_form + T * log(2 * base::pi))
   #cat("log_det_K:", log_det_K, "quad_form:", quad_form, "T:", T, "log_prior:", log_prior, "\n")
   return(log_prior)
 }
@@ -96,17 +94,17 @@ log_gp_prior_vec_direct <- function(eta, mean, K) {
   return(as.numeric(log_prior))
 }
 
-update_phi <- function(Phi, k, d, new_values) {
-  Phi_copy <- Phi
-  Phi_copy[k, d, ] <- new_values
-  return(Phi_copy)
-}
-
-
-update_lambda <- function(Lambda, i, k, new_values) {
-  Lambda_copy <- Lambda
-  Lambda_copy[i, k, ] <- new_values
-  return(Lambda_copy)
-}
+# update_phi <- function(Phi, k, d, new_values) {
+#   Phi_copy <- Phi
+#   Phi_copy[k, d, ] <- new_values
+#   return(Phi_copy)
+# }
+# 
+# 
+# update_lambda <- function(Lambda, i, k, new_values) {
+#   Lambda_copy <- Lambda
+#   Lambda_copy[i, k, ] <- new_values
+#   return(Lambda_copy)
+# }
 
 
