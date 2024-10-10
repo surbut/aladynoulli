@@ -19,7 +19,7 @@ n_topics <- 3  # Set this to your desired number of topics
 n_diseases <- dim(Y)[2]
 Ttot <- dim(Y)[3]
 
-initial_values <- initialize_mcmc(y, g_i, n_topics, n_diseases, Ttot,
+initial_values <- initialize_mcmc(Y, g_i, n_topics, n_diseases, Ttot,
                                   var_scales_phi = var_scales_phi,
                                   length_scales_lambda = length_scales_lambda,
                                   length_scales_phi = length_scales_phi,
