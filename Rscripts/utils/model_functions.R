@@ -5,22 +5,22 @@ log_likelihood <- function(y, Lambda, Phi) {
   n_individuals <- dim(Lambda)[1]
   n_topics <- dim(Lambda)[2]
   n_diseases <- dim(Phi)[2]
-  T <- dim(Lambda)[3]
+  Ttot <- dim(Lambda)[3]
   
   theta <- apply_softmax_to_lambda(Lambda) # Apply softmax to Lambda
-  pi <- array(0, dim = c(n_individuals, n_diseases, T))
+  pi <- array(0, dim = c(n_individuals, n_diseases, Ttot))
   
-  for (t in 1:T) {
+  for (t in 1:Ttot) {
     pi[, , t] <- theta[, , t] %*% logistic(Phi[, , t])
   }
   
   log_lik <- 0
   for (i in 1:n_individuals) {
     for (d in 1:n_diseases) {
-      at_risk <- which(cumsum(y[i, d, ]) == 0)
+      at_risk <- which(cumsum(y[i, d, ]) == 0) # <--- Major time waste
       if (length(at_risk) > 0) {
         event_time <- max(at_risk) + 1
-        if (event_time <= T) {
+        if (event_time <= Ttot) {
           log_lik <- log_lik + log(pi[i, d, event_time])
         }
         log_lik <- log_lik + sum(log(1 - pi[i, d, at_risk]))
