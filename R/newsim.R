@@ -23,7 +23,7 @@ generate_tensor_data <- function(N = 1000, D = 5, T = 50, K = 3, num_covariates 
   mu_d <- array(NA, dim = c(D, T))
   for (d in 1:D) {
     cov_matrix_mu <- exp(-0.5 * var_scales_mu[d] * (time_diff ^ 2) / length_scales_mu[d] ^ 2)
-    mu_d[d, ] <- mvrnorm(1, mu = rep(qlogis(0.01), T), Sigma = cov_matrix_mu)
+    mu_d[d, ] <- mvrnorm(1, mu = rep(qlogis(0.10), T), Sigma = cov_matrix_mu)
   }
   
   # Generate lambda, phi matrices
