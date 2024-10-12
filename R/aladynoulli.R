@@ -9,6 +9,9 @@ aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin){
   
   # Matrix of indexed to ignore. 
   # Create a matrix of the indexes for the time-to-event for each patient-disease
+  
+  ## start from the truth 
+  ### reasonable to just do two
   precomputed_indices <- precompute_likelihood_indices(Y)
   
   # Here you initialize the MCMC
@@ -46,7 +49,7 @@ update_Lambda <- function(Y, Lambda, G, Gamma, s = 0.01){
     print(i)
     #setTxtProgressBar(pb, i/n_individuals)
     for(k in 1:n_topics){
-      # Sample Lambda from past value
+      # Sample Lambda from past value + RBF (smooth)
       lambda_new <- c(rmvnorm(1, Lambda[i, k, ], sigma = ))
       #lambda_new <- rnorm(Ttot) + 1
       # Evaluate log posterior

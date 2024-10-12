@@ -7,7 +7,6 @@ create_increasing_trend <- function(start, end, T) {
 }
 
 
-## thinkin about trying for 2 disease
 
 generate_tensor_data <- function(N = 1000, D = 5, T = 50, K = 3, num_covariates = 5) {
   library(mvtnorm)
@@ -56,8 +55,7 @@ generate_tensor_data <- function(N = 1000, D = 5, T = 50, K = 3, num_covariates 
   for (k in 1:K) {
     cov_matrix <- exp(-0.5 * var_scales_lambda[k] * (time_diff ^ 2) / length_scales_lambda[k] ^ 2)
     for (i in 1:N) {
-      #mean_lambda <- g_i[i, ] %*% Gamma_k[k, ]
-      mean_lambda= 0
+      mean_lambda <- g_i[i, ] %*% Gamma_k[k, ]
       lambda_ik[i, k, ] <- mvrnorm(1, mu = rep(mean_lambda, T), Sigma = cov_matrix)
     }
   }
