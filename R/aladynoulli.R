@@ -59,17 +59,17 @@ aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,niters){
   # Initialize storage for samples and diagnostics
   samples <- list(
     Lambda = array(0, dim = c(
-      n_iterations, dim(current_state$Lambda)
+      n_iters, dim(current_state$Lambda)
     )),
-    Phi = array(0, dim = c(n_iterations, dim(
+    Phi = array(0, dim = c(n_iters, dim(
       current_state$Phi
     ))),
     Gamma = array(0, dim = c(
-      n_iterations, dim(current_state$Gamma)
+      n_iters, dim(current_state$Gamma)
     ))
   )
-  log_likelihoods <- numeric(n_iterations)
-  log_posteriors <- numeric(n_iterations)
+  log_likelihoods <- numeric(n_iters)
+  log_posteriors <- numeric(n_iters)
   acceptance_rates <- list(Lambda = 0, Phi = 0)
   
   
