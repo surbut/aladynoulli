@@ -1,10 +1,17 @@
 
 
-aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin){
+library(rsvd)  # For fast randomized SVD
+library(mgcv) 
+
+
+aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,niters){
   
   
-  
-  Ttot <- dim(Y)[3]
+  N <- dim(Y)[1]  # Number of individuals
+  D <- dim(Y)[2]  # Number of diseases
+  Ttot <- dim(Y)[3]  # Number of time points
+  P <- ncol(G)  # Number of genetic covariates
+  K <- n_topics   # Number of topics
   
   
   # Matrix of indexed to ignore. 
@@ -15,102 +22,235 @@ aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin){
   precomputed_indices <- precompute_likelihood_indices(Y)
   
   # Here you initialize the MCMC
-  initial_values <- initialize_mcmc(Y, 
-                                    G, 
-                                    n_topics, 
-                                    n_diseases, 
-                                    Ttot,
-                                    var_scales_phi = var_scales_phi,
-                                    length_scales_lambda = length_scales_lambda,
-                                    length_scales_phi = length_scales_phi,
-                                    var_scales_lambda = var_scales_lambda,
-                                    sigsmall = 0.01)
+  initial_values <- mcmc_init_two(y = Y, G = G)
+  current_state=initial_values
+
+  K_lambda <- lapply(1:n_topics, function(k) {
+    time_diff_matrix <- outer(1:Ttot, 1:Ttot, "-") ^ 2
+    var_scales_lambda[k] * exp(-0.5 * time_diff_matrix / length_scales_lambda[k] ^
+                                 2) + diag(1e-6, Ttot)
+  })
+  K_phi <- lapply(1:n_topics, function(k) {
+    time_diff_matrix <- outer(1:Ttot, 1:Ttot, "-") ^ 2
+    var_scales_phi[k] * exp(-0.5 * time_diff_matrix / length_scales_phi[k] ^
+                              2) + diag(1e-6, Ttot)
+  })
+  
+  chol_lambda <- lapply(K_lambda, chol)
+  chol_phi <- lapply(K_phi, chol)
+  
+  # Precompute log determinants and inverses for the log_gp_prior_vec function
+  K_inv_lambda <- lapply(K_lambda, function(K) {
+    K_inv <- solve(K)
+    log_det_K <- determinant(K, logarithm = TRUE)$modulus
+    list(K_inv = K_inv, log_det_K = log_det_K)
+  })
+  K_inv_phi <- lapply(K_phi, function(K) {
+    K_inv <- solve(K)
+    log_det_K <- determinant(K, logarithm = TRUE)$modulus
+    list(K_inv = K_inv, log_det_K = log_det_K)
+  })
 
   
-  # Here you run it
   
   
-  
-  
-}
+  acceptance_rates <- list(Lambda = 0, Phi = 0)
 
-
-# Try to update a matrix by looping through individuals instead of proposing 
-# the full array. Lambda[i, , ]
-# try to have smoothed proposals. 
-update_Lambda <- function(Y, Lambda, G, Gamma, s = 0.01){
+  # Initialize storage for samples and diagnostics
+  samples <- list(
+    Lambda = array(0, dim = c(
+      n_iterations, dim(current_state$Lambda)
+    )),
+    Phi = array(0, dim = c(n_iterations, dim(
+      current_state$Phi
+    ))),
+    Gamma = array(0, dim = c(
+      n_iterations, dim(current_state$Gamma)
+    ))
+  )
+  log_likelihoods <- numeric(n_iterations)
+  log_posteriors <- numeric(n_iterations)
+  acceptance_rates <- list(Lambda = 0, Phi = 0)
   
-  n_individuals <- dim(Lambda)[1]
-  n_topics <- dim(Lambda)[2]
-  Ttot <- dim(Lambda)[3]
   
-  #pb <- txtProgressBar(style=3)
-  for(i in 1:n_individuals){
-    print(i)
-    #setTxtProgressBar(pb, i/n_individuals)
-    for(k in 1:n_topics){
-      # Sample Lambda from past value + RBF (smooth)
-      lambda_new <- c(rmvnorm(1, Lambda[i, k, ], sigma = ))
-      #lambda_new <- rnorm(Ttot) + 1
-      # Evaluate log posterior
-      Lambda_new <- Lambda
-      Lambda_new[i, k, ] <- lambda_new
-      
-      lpost_new <- compute_log_likelihood(Lambda_new, Phi, precomputed_indices) + 
-        log_gp_prior_vec(lambda_new, rep(G[i, ] %*% Gamma[k, ], Ttot), K_inv = K_inv_lambda[[k]]$K_inv, 
-                         log_det_K = K_inv_lambda[[k]]$log_det_K)
-      
-      lpost_old <- compute_log_likelihood(Lambda, Phi, precomputed_indices) + 
-        log_gp_prior_vec(Lambda[i, k, ], rep(G[i, ] %*% Gamma[k, ], Ttot), K_inv = K_inv_lambda[[k]]$K_inv, 
-                         log_det_K = K_inv_lambda[[k]]$log_det_K)
-      # Accept/reject
-      log_acc <- lpost_new - lpost_old
-      if(log(runif(1)) < log_acc){
-        Lambda[i, k, ] <- lambda_new
-        print("accepted! :)")
+  current_state=initial_values
+  for (iter in 1:n_iters) {
+    # Update Lambda
+    for (i in 1:n_individuals) {
+      for (k in 1:n_topics) {
+        # Efficient sampling from GP prior
+        mean_lambda <- rep(g_i[i, ] %*% current_state$Gamma[k, ], Ttot)
+        z <- rnorm(Ttot)
+        proposed_Lambda_ik <- mean_lambda + drop(chol_lambda[[k]] %*% z) ##smipler than sampling from MVRNORM
+        
+        # Calculate log-likelihood and log-prior for current and proposed states
+        current_log_lik <- compute_log_likelihood(current_state$Lambda,
+                                                  current_state$Phi,
+                                                  precomputed_indices)
+        
+        
+        proposed_Lambda <- current_state$Lambda
+        proposed_Lambda[i, k, ] <- proposed_Lambda_ik
+        proposed_log_lik <- compute_log_likelihood(proposed_Lambda,
+                                                   current_state$Phi,
+                                                   precomputed_indices)
+        
+        current_log_prior_lambda <- log_gp_prior_vec(
+          current_state$Lambda[i, k, ],
+          mean_lambda,
+          K_inv_lambda[[k]]$K_inv,
+          K_inv_lambda[[k]]$log_det_K
+        )
+        proposed_log_prior_lambda <- log_gp_prior_vec(
+          proposed_Lambda_ik,
+          mean_lambda,
+          K_inv_lambda[[k]]$K_inv,
+          K_inv_lambda[[k]]$log_det_K
+        )
+        
+        # Calculate acceptance ratio
+        log_accept_ratio <- (proposed_log_lik + proposed_log_prior_lambda) - (current_log_lik + current_log_prior_lambda)
+        
+        if (log(runif(1)) < log_accept_ratio) {
+          current_state$Lambda[i, k, ] <- proposed_Lambda_ik
+          acceptance_rates$Lambda <- acceptance_rates$Lambda + 1
+          c(print(paste0("accept!", iter)))
+        }
       }
     }
-  }
-}
-
-for(t in 1:Ttot){
-  print(t)
-  #setTxtProgressBar(pb, i/n_individuals)
-  for(k in 1:n_topics){
-    # Sample Lambda from past value
-    lambda_new <- c(rmvnorm(1, Lambda[, k, t], sigma = s * diag(n_individuals)))
-    lambda_new <- rnorm(n_individuals)
-    # Evaluate log posterior
-    Lambda_new <- Lambda
-    Lambda_new[, k, t] <- lambda_new
     
-    lpost_new <- compute_log_likelihood(Lambda_new, Phi, precomputed_indices) + 
-      log_gp_prior_vec(lambda_new, rep(G[i, ] %*% Gamma[k, ], Ttot), K_inv = K_inv_lambda[[k]]$K_inv, 
-                       log_det_K = K_inv_lambda[[k]]$log_det_K)
     
-    lpost_old <- compute_log_likelihood(Lambda, Phi, precomputed_indices) + 
-      log_gp_prior_vec(Lambda[i, k, ], rep(G[i, ] %*% Gamma[k, ], Ttot), K_inv = K_inv_lambda[[k]]$K_inv, 
-                       log_det_K = K_inv_lambda[[k]]$log_det_K)
-    # Accept/reject
-    log_acc <- lpost_new - lpost_old
-    if(log(runif(1)) < log_acc){
-      Lambda[i, k, ] <- lambda_new
-      print("accepted! :)")
+    
+    # Update Phi (similar changes as for Lambda)
+    for (k in 1:n_topics) {
+      for (d in 1:n_diseases) {
+        z <- rnorm(Ttot)
+        proposed_Phi_kd <- current_state$mu_d[d, ] + drop(chol_phi[[k]] %*% z)
+        
+        current_log_lik <- compute_log_likelihood(current_state$Lambda,
+                                                  current_state$Phi,
+                                                  precomputed_indices)
+        proposed_Phi <- current_state$Phi
+        proposed_Phi[k, d, ] <- proposed_Phi_kd
+        proposed_log_lik <- compute_log_likelihood(current_state$Lambda,
+                                                   proposed_Phi,
+                                                   precomputed_indices)
+        
+        current_log_prior_phi <- log_gp_prior_vec(
+          current_state$Phi[k, d, ],
+          current_state$mu_d[d, ],
+          K_inv_phi[[k]]$K_inv,
+          K_inv_phi[[k]]$log_det_K
+        )
+        proposed_log_prior_phi <- log_gp_prior_vec(
+          proposed_Phi_kd,
+          current_state$mu_d[d, ],
+          K_inv_phi[[k]]$K_inv,
+          K_inv_phi[[k]]$log_det_K
+        )
+        
+        log_accept_ratio <- (proposed_log_lik + proposed_log_prior_phi) - (current_log_lik + current_log_prior_phi)
+        
+        if (log(runif(1)) < log_accept_ratio) {
+          current_state$Phi[k, d, ] <- proposed_Phi_kd
+          acceptance_rates$Phi <- acceptance_rates$Phi + 1
+          print("accepted! :)")
+        }
+      }
     }
-  }
+    
+    
+    
+    # Update Gamma using Gibbs sampler
+    for (k in 1:n_topics) {
+      Lambda_k <- current_state$Lambda[, k, ]  # N x T matrix for topic k
+      K_inv <- K_inv_lambda[[k]]$K_inv  # T x T inverse covariance matrix
+      
+      # Compute posterior precision (inverse covariance), see standard MVN derivatino using design matrix on X instead of N
+      posterior_precision <- diag(1, P)  # Prior precision (assuming standard normal prior, because we're asumming gamma_kp is N(0,1)
+      posterior_mean <- rep(0, P)  # Prior mean
+      
+      for (i in 1:N) {
+        Xi <- matrix(rep(g_i[i, ], Ttot), nrow = Ttot, byrow = TRUE)  # T x P matrix
+        precision_contrib <- t(Xi) %*% K_inv %*% Xi
+        posterior_precision <- posterior_precision + precision_contrib
+        posterior_mean <- posterior_mean + t(Xi) %*% K_inv %*% Lambda_k[i, ]
+      }
+      
+      # Compute posterior covariance and mean
+      posterior_covariance <- solve(posterior_precision, tol = 1e-20)
+      posterior_mean <- posterior_covariance %*% posterior_mean
+      
+      # Sample new Gamma_k
+      current_state$Gamma[k, ] <- mvrnorm(1, mu = posterior_mean, Sigma = posterior_covariance)
+    }
+    
+    
+    # Store samples and diagnostics
+    samples$Lambda[iter, , , ] <- current_state$Lambda
+    samples$Phi[iter, , , ] <- current_state$Phi
+    samples$Gamma[iter, , ] <- current_state$Gamma
+    
+    log_likelihoods[iter] <- current_log_lik
+    log_posteriors[iter] <- log_sum_exp(c(
+      current_log_lik + current_log_prior_lambda + current_log_prior_phi +
+        sum(dnorm(current_state$Gamma, 0, 1, log = TRUE))
+    ))
+    
+    cat("current_log_lik:", current_log_lik, "\n")
+    cat("current_log_prior_lambda:", current_log_prior_lambda, "\n")
+    cat("current_log_prior_phi:", current_log_prior_phi, "\n")
+    cat("log_prior_gamma:", sum(dnorm(current_state$Gamma, 0, 1, log = TRUE)), "\n")
+    
+  # Print progress
+  #if (iter %% 10 == 0) {
+  cat(
+    "Iteration",
+    iter,
+    "Log posterior:",
+    log_posteriors[iter],
+    "Log-likelihood:",
+    log_likelihoods[iter],
+    "\n"
+  )
+  cat(
+    "Acceptance rates: Lambda =",
+    acceptance_rates$Lambda / iter,
+    "Phi =",
+    acceptance_rates$Phi / iter,
+    "\n"
+  )
+  #}
 }
-  
-  
+
+# Calculate final acceptance rates
+for (param in names(acceptance_rates)) {
+  acceptance_rates[[param]] <- acceptance_rates[[param]] / n_iterations
+}
+
+return(
+  list(
+    samples = samples,
+    log_likelihoods = log_likelihoods,
+    acceptance_rates = acceptance_rates,
+    log_posteriors = log_posteriors
+  )
+)
+}
 
 
-data <- generate_tensor_data()
+
+####
+
+data <- generate_tensor_data(num_covariates = 5,K = 3,T = 20,D = 5,N = 100)
+
 
 Y <- data$Y
 G <- data$G
+plot_individuals(data$S,num_individuals = 3)
 
-
-
-pi <- 
+# Here you initialize the MCMC
+initial_values <- mcmc_init_two(y = Y, G = G)
 
 
 
