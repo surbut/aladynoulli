@@ -4,7 +4,7 @@ library(rsvd)  # For fast randomized SVD
 library(mgcv) 
 
 
-aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,niters){
+aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,n_iters){
   
   
   N <- dim(Y)[1]  # Number of individuals
@@ -78,7 +78,8 @@ aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,niters){
         # Efficient sampling from GP prior
         
         z <- rnorm(Ttot)
-        proposed_Lambda_ik <- current_state$Lambda[i,k,]+ drop(chol_lambda[[k]] %*% z)  ##simpler than sampling from MVRNORM
+        perturbation <- step_size_lambda * drop(chol_lambda[[k]] %*% z) ##simpler than sampling from MVRNORM
+        proposed_Lambda_ik <- current_state$Lambda[i,k,]+ perturbation  
         
         # Calculate log-likelihood and log-prior for current and proposed states
         current_log_lik <- compute_log_likelihood(current_state$Lambda,
@@ -122,7 +123,8 @@ aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,niters){
     for (k in 1:n_topics) {
       for (d in 1:n_diseases) {
         z <- rnorm(Ttot)
-        proposed_Phi_kd <- current_state$Phi[k,d, ] + drop(chol_phi[[k]] %*% z)
+        perturbation <- step_size_phi * drop(chol_phi[[k]] %*% z)
+        proposed_Phi_kd <- current_state$Phi[k,d,] + perturbation
         
         current_log_lik <- compute_log_likelihood(current_state$Lambda,
                                                   current_state$Phi,
@@ -156,6 +158,14 @@ aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,niters){
       }
     }
     
+    # Adapt step sizes every 100 iterations
+    if (iter > 100 && iter %% 100 == 0) {
+      current_accept_rate_lambda <- acceptance_rates$Lambda / (iter * n_individuals * n_topics)
+      current_accept_rate_phi <- acceptance_rates$Phi / (iter * n_topics * n_diseases)
+      
+      step_size_lambda <- step_size_lambda * exp(current_accept_rate_lambda - target_accept_rate)
+      step_size_phi <- step_size_phi * exp(current_accept_rate_phi - target_accept_rate)
+    }
     
     
     # Update Gamma using Gibbs sampler
