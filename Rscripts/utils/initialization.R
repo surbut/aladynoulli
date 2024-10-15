@@ -66,6 +66,7 @@ initialize_mcmc <- function(y, G, n_topics, n_diseases, T,length_scales_lambda,l
 ### here we do the cool stuff with the SVD initialization, reprojection onto the individual geneti ccovariates
 
 mcmc_init_two <- function(y, G) {
+  
   N <- dim(y)[1]  # Number of individuals
   D <- dim(y)[2]  # Number of diseases
   Ttot <- dim(y)[3]  # Number of time points
@@ -81,10 +82,9 @@ mcmc_init_two <- function(y, G) {
   # 2. Create time basis (polynomial without intercept because we are using the genetics or disease prevalence)
   time_basis <- cbind(1, poly(seq_len(Ttot), degree = min(Ttot-1, 3), simple = TRUE))
   
-  
-  # 3. Initialize and project Lambda
   # 3. Initialize and project Lambda
   lambda_init <- array(0, dim = c(N, K, Ttot))
+  
   Gamma_init <- matrix(0, nrow = K, ncol = P)
   for (k in 1:K) {
     Gamma_init[k, ] <- coef(lm(A1[, k] ~ G - 1)) ## because centered around genetics

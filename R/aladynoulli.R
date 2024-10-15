@@ -51,10 +51,7 @@ aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,niters){
     list(K_inv = K_inv, log_det_K = log_det_K)
   })
 
-  
-  
-  
-  acceptance_rates <- list(Lambda = 0, Phi = 0)
+
 
   # Initialize storage for samples and diagnostics
   samples <- list(
@@ -79,9 +76,9 @@ aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,niters){
     for (i in 1:n_individuals) {
       for (k in 1:n_topics) {
         # Efficient sampling from GP prior
-        mean_lambda <- rep(g_i[i, ] %*% current_state$Gamma[k, ], Ttot)
+        
         z <- rnorm(Ttot)
-        proposed_Lambda_ik <- mean_lambda + drop(chol_lambda[[k]] %*% z) ##smipler than sampling from MVRNORM
+        proposed_Lambda_ik <- current_state$Lambda[i,k,]+ drop(chol_lambda[[k]] %*% z)  ##simpler than sampling from MVRNORM
         
         # Calculate log-likelihood and log-prior for current and proposed states
         current_log_lik <- compute_log_likelihood(current_state$Lambda,
@@ -125,7 +122,7 @@ aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,niters){
     for (k in 1:n_topics) {
       for (d in 1:n_diseases) {
         z <- rnorm(Ttot)
-        proposed_Phi_kd <- current_state$mu_d[d, ] + drop(chol_phi[[k]] %*% z)
+        proposed_Phi_kd <- current_state$Phi[k,d, ] + drop(chol_phi[[k]] %*% z)
         
         current_log_lik <- compute_log_likelihood(current_state$Lambda,
                                                   current_state$Phi,
@@ -241,16 +238,5 @@ return(
 
 
 ####
-
-data <- generate_tensor_data(num_covariates = 5,K = 3,T = 20,D = 5,N = 100)
-
-
-Y <- data$Y
-G <- data$G
-plot_individuals(data$S,num_individuals = 3)
-
-# Here you initialize the MCMC
-initial_values <- mcmc_init_two(y = Y, G = G)
-
 
 
