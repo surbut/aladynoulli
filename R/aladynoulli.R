@@ -75,6 +75,10 @@ aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,n_iters,initial_va
   acceptance_rates <- list(Lambda = 0, Phi = 0)
   
   
+  # Initialize acceptance counters
+  acceptance_counters <- list(Lambda = 0, Phi = 0)
+  total_proposals <- list(Lambda = 0, Phi = 0)
+
   current_state=initial_values
   for (iter in 1:n_iters) {
     # Update Lambda
@@ -112,17 +116,21 @@ aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,n_iters,initial_va
           K_inv_lambda[[k]]$K_inv,
           K_inv_lambda[[k]]$log_det_K
         )
+
         
         # Calculate acceptance ratio
         log_accept_ratio <- (proposed_log_lik + proposed_log_prior_lambda) - (current_log_lik + current_log_prior_lambda)
         
         if (log(runif(1)) < log_accept_ratio) {
           current_state$Lambda[i, k, ] <- proposed_Lambda_ik
-          acceptance_rates$Lambda <- acceptance_rates$Lambda + 1
+          acceptance_counters$Lambda <- acceptance_counters$Lambda + 1
           c(print(paste0("accept!", iter)))
         }
+        total_proposals$Lambda <- total_proposals$Lambda + 1
       }
     }
+
+    
     
     
     
@@ -159,20 +167,33 @@ aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,n_iters,initial_va
         
         if (log(runif(1)) < log_accept_ratio) {
           current_state$Phi[k, d, ] <- proposed_Phi_kd
-          acceptance_rates$Phi <- acceptance_rates$Phi + 1
+          acceptance_counters$Phi <- acceptance_counters$Phi + 1
+
           print("accepted! :)")
         }
+        total_proposals$Phi <- total_proposals$Phi + 1
       }
     }
     
+    
+    # Adapt step sizes every 100 iterations
     # Adapt step sizes every 100 iterations
     if (iter > 100 && iter %% 100 == 0) {
-      current_accept_rate_lambda <- acceptance_rates$Lambda / (iter * n_individuals * n_topics)
-      current_accept_rate_phi <- acceptance_rates$Phi / (iter * n_topics * n_diseases)
+      current_accept_rate_lambda <- acceptance_counters$Lambda / total_proposals$Lambda
+      current_accept_rate_phi <- acceptance_counters$Phi / total_proposals$Phi
       
       step_size_lambda <- step_size_lambda * exp(current_accept_rate_lambda - target_accept_rate)
       step_size_phi <- step_size_phi * exp(current_accept_rate_phi - target_accept_rate)
     }
+
+    # When printing progress
+    cat(
+      "Acceptance rates: Lambda =",
+      acceptance_counters$Lambda / total_proposals$Lambda,
+      "Phi =",
+      acceptance_counters$Phi / total_proposals$Phi,
+      "\n"
+    )
     
     
     # Update Gamma using Gibbs sampler
@@ -239,18 +260,20 @@ aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,n_iters,initial_va
 
 # Calculate final acceptance rates
 for (param in names(acceptance_rates)) {
-  acceptance_rates[[param]] <- acceptance_rates[[param]] / n_iterations
+  acceptance_rates[[param]] <- acceptance_rates[[param]] / n_iters
 }
 
 return(
   list(
     samples = samples,
     log_likelihoods = log_likelihoods,
-    acceptance_rates = acceptance_rates,
+    acceptance_rates = list(
+      Lambda = acceptance_counters$Lambda / total_proposals$Lambda,
+      Phi = acceptance_counters$Phi / total_proposals$Phi
+    ),
     log_posteriors = log_posteriors
   )
 )
-}
 
 
 

@@ -67,15 +67,15 @@ mcmc_init_two <- function(y, G, n_topics, length_scales_lambda, var_scales_lambd
 
 # Gradient computation functions
 compute_gradient_log_likelihood_lambda <- function(Lambda, Phi, Y, i, k, t) {
-  N <- dim(Lambda)[1]
   D <- dim(Phi)[2]
   K <- dim(Lambda)[2]
   
   gradient <- 0
   for (d in 1:D) {
-    pi_idt <- sum(softmax(Lambda[i,,t]) * sigmoid(Phi[,d,t]))
-    dL_dpi <- (Y[i,d,t] - pi_idt) / (pi_idt * (1 - pi_idt))
-    dpi_dlambda <- sigmoid(Phi[k,d,t]) * softmax(Lambda[i,k,t]) * (1 - softmax(Lambda[i,k,t]))
+    theta <- softmax(Lambda[i,,t])
+    pi_idt <- sum(theta * sigmoid(Phi[,d,t]))
+    dL_dpi <- Y[i,d,t]/pi_idt - (1-Y[i,d,t])/(1-pi_idt)
+    dpi_dlambda <- sigmoid(Phi[k,d,t]) * theta[k] * (1 - theta[k])
     gradient <- gradient + dL_dpi * dpi_dlambda
   }
   
@@ -87,9 +87,10 @@ compute_gradient_log_likelihood_phi <- function(Lambda, Phi, Y, k, d, t) {
   
   gradient <- 0
   for (i in 1:N) {
-    pi_idt <- sum(softmax(Lambda[i,,t]) * sigmoid(Phi[,d,t]))
-    dL_dpi <- (Y[i,d,t] - pi_idt) / (pi_idt * (1 - pi_idt))
-    dpi_dphi <- softmax(Lambda[i,k,t]) * sigmoid(Phi[k,d,t]) * (1 - sigmoid(Phi[k,d,t]))
+    theta <- softmax(Lambda[i,,t])
+    pi_idt <- sum(theta * sigmoid(Phi[,d,t]))
+    dL_dpi <- Y[i,d,t]/pi_idt - (1-Y[i,d,t])/(1-pi_idt)
+    dpi_dphi <- theta[k] * sigmoid(Phi[k,d,t]) * (1 - sigmoid(Phi[k,d,t]))
     gradient <- gradient + dL_dpi * dpi_dphi
   }
   
@@ -107,26 +108,25 @@ compute_gradient_log_prior_phi <- function(Phi_k, K_inv_phi) {
 # SGLD update functions
 update_lambda <- function(Lambda, Phi, Y, K_inv_lambda, i, k, t, epsilon) {
   grad_likelihood <- compute_gradient_log_likelihood_lambda(Lambda, Phi, Y, i, k, t)
-  grad_prior <- compute_gradient_log_prior_lambda(Lambda[i,k,], K_inv_lambda)
-  full_grad <- grad_likelihood - (K_inv_lambda %*% Lambda[i,k,])[t]
+  grad_prior <- (K_inv_lambda %*% Lambda[i,k,])[t]
+  full_grad <- grad_likelihood - grad_prior
   
-  eta <- rnorm(1, 0, 1)
-  Lambda[i,k,t] <- Lambda[i,k,t] + 0.5 * epsilon * full_grad + sqrt(epsilon) * eta
+  eta <- rnorm(1, 0, sqrt(epsilon))
+  Lambda[i,k,t] <- Lambda[i,k,t] + 0.5 * epsilon * full_grad + eta
   
   return(Lambda)
 }
 
 update_phi <- function(Lambda, Phi, Y, K_inv_phi, k, d, t, epsilon) {
   grad_likelihood <- compute_gradient_log_likelihood_phi(Lambda, Phi, Y, k, d, t)
-  grad_prior <- compute_gradient_log_prior_phi(Phi[k,d,], K_inv_phi)
-  full_grad <- grad_likelihood - (K_inv_phi %*% Phi[k,d,])[t]
+  grad_prior <- (K_inv_phi %*% Phi[k,d,])[t]
+  full_grad <- grad_likelihood - grad_prior
   
-  eta <- rnorm(1, 0, 1)
-  Phi[k,d,t] <- Phi[k,d,t] + 0.5 * epsilon * full_grad + sqrt(epsilon) * eta
+  eta <- rnorm(1, 0, sqrt(epsilon))
+  Phi[k,d,t] <- Phi[k,d,t] + 0.5 * epsilon * full_grad + eta
   
   return(Phi)
 }
-
 # Main Aladynoulli function
 aladynoulli <- function(Y, G, n_topics = 3, n_iters = 1000, step_size_lambda = 0.01, step_size_phi = 0.01, 
                         length_scales_lambda, var_scales_lambda, length_scales_phi, var_scales_phi) {
@@ -163,9 +163,21 @@ aladynoulli <- function(Y, G, n_topics = 3, n_iters = 1000, step_size_lambda = 0
     Gamma = array(0, dim = c(n_iters, dim(Gamma)))
   )
   log_likelihoods <- numeric(n_iters)
+  log_priors_lambda <- numeric(n_iters)
+  log_priors_phi <- numeric(n_iters)
   
   # Main MCMC loop
   for (iter in 1:n_iters) {
+    # Compute log-priors
+    log_prior_lambda <- 0
+    log_prior_phi <- 0
+    for (k in 1:K) {
+      log_prior_lambda <- log_prior_lambda + dmvnorm(as.vector(Lambda[,,k]), mean = rep(0, N*Ttot), sigma = K_lambda[[k]], log = TRUE)
+      log_prior_phi <- log_prior_phi + dmvnorm(as.vector(Phi[k,,]), mean = rep(0, D*Ttot), sigma = K_phi[[k]], log = TRUE)
+    }
+    log_priors_lambda[iter] <- log_prior_lambda
+    log_priors_phi[iter] <- log_prior_phi
+
     # Update Lambda
     for (i in 1:N) {
       for (k in 1:K) {
@@ -200,19 +212,31 @@ aladynoulli <- function(Y, G, n_topics = 3, n_iters = 1000, step_size_lambda = 0
     samples$Phi[iter, , , ] <- Phi
     samples$Gamma[iter, , ] <- Gamma
     
-    # Compute log-likelihood (simplified version)
-    log_lik <- sum(Y * log(pnorm(Lambda + Phi)) + (1 - Y) * log(1 - pnorm(Lambda + Phi)), na.rm = TRUE)
+    # Compute log-likelihood
+    log_lik <- 0
+    for (i in 1:N) {
+      for (d in 1:D) {
+        for (t in 1:Ttot) {
+          pi_idt <- sum(softmax(Lambda[i,,t]) * sigmoid(Phi[,d,t]))
+          log_lik <- log_lik + Y[i,d,t] * log(pi_idt) + (1 - Y[i,d,t]) * log(1 - pi_idt)
+        }
+      }
+    }
     log_likelihoods[iter] <- log_lik
     
     # Print progress
     if (iter %% 100 == 0) {
-      cat("Iteration", iter, "Log-likelihood:", log_lik, "\n")
+      cat("Iteration", iter, "Log-likelihood:", log_lik, 
+          "Log-prior Lambda:", log_prior_lambda, 
+          "Log-prior Phi:", log_prior_phi, "\n")
     }
   }
   
   return(list(
     samples = samples,
     log_likelihoods = log_likelihoods,
+    log_priors_lambda = log_priors_lambda,
+    log_priors_phi = log_priors_phi,
     init_state = init_state
   ))
 }
