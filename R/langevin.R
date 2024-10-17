@@ -250,14 +250,15 @@ P <- 3    # Number of genetic covariates
 n_topics <- 3
 
 # Generate synthetic data
-Y <- array(rbinom(N * D * Ttot, 1, 0.5), dim = c(N, D, Ttot))
-G <- matrix(rnorm(N * P), nrow = N, ncol = P)
 
-# Define length scales and variance scales
-length_scales_lambda <- rep(1, n_topics)
-var_scales_lambda <- rep(1, n_topics)
-length_scales_phi <- rep(1, n_topics)
-var_scales_phi <- rep(1, n_topics)
+
+data <- generate_tensor_data(num_covariates = P,K = n_topics,T = Ttot,D = D,N =N)
+
+Y <- data$Y
+G <- data$G
+plot_individuals(data$S,num_individuals = 3)
+# Here you initialize the MCMC
+
 
 # Run the model
 result <- aladynoulli(Y, G, n_topics = n_topics, n_iters = 1000,
