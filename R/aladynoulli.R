@@ -124,7 +124,7 @@ aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,n_iters,initial_va
         if (log(runif(1)) < log_accept_ratio) {
           current_state$Lambda[i, k, ] <- proposed_Lambda_ik
           acceptance_counters$Lambda <- acceptance_counters$Lambda + 1
-          c(print(paste0("accept!", iter)))
+          #c(print(paste0("accept!", iter)))
         }
         total_proposals$Lambda <- total_proposals$Lambda + 1
       }
@@ -169,7 +169,7 @@ aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,n_iters,initial_va
           current_state$Phi[k, d, ] <- proposed_Phi_kd
           acceptance_counters$Phi <- acceptance_counters$Phi + 1
 
-          print("accepted! :)")
+          #print("accepted! :)")
         }
         total_proposals$Phi <- total_proposals$Phi + 1
       }
@@ -188,10 +188,10 @@ aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,n_iters,initial_va
 
     # When printing progress
     cat(
-      "Acceptance rates: Lambda =",
-      acceptance_counters$Lambda / total_proposals$Lambda,
+      "Acceptance counters: Lambda =",
+      acceptance_counters$Lambda ,#/ total_proposals$Lambda,
       "Phi =",
-      acceptance_counters$Phi / total_proposals$Phi,
+      acceptance_counters$Phi, #/ total_proposals$Phi,
       "\n"
     )
     
@@ -273,7 +273,7 @@ return(
     ),
     log_posteriors = log_posteriors
   )
-)
+)}
 
 
 
