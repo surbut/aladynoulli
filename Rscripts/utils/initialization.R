@@ -65,13 +65,13 @@ initialize_mcmc <- function(y, G, n_topics, n_diseases, T,length_scales_lambda,l
 
 ### here we do the cool stuff with the SVD initialization, reprojection onto the individual geneti ccovariates
 
-mcmc_init_two <- function(y, G) {
+mcmc_init_two <- function(y, G,num_topics, length_scales_lambda, var_scales_lambda, length_scales_phi, var_scales_phi) {
   
   N <- dim(y)[1]  # Number of individuals
   D <- dim(y)[2]  # Number of diseases
   Ttot <- dim(y)[3]  # Number of time points
   P <- ncol(G)  # Number of genetic covariates
-  K <- n_topics   # Number of topics
+  K <- num_topics   # Number of topics
   
   # 1. Perform SVD on the time-averaged data
   Y_mean <- apply(y, c(1,2), mean)

@@ -18,6 +18,9 @@ Y <- data$Y
 G <- data$G
 plot_individuals(data$S,num_individuals = 3)
 # Here you initialize the MCMC
-initial_values <- mcmc_init_two(y = Y, G = G, n_topics = 3)
-a=aladynoulli(Y, G, n_topics = 3, nsamples=100, nburnin=100,n_iters=1000)
+initial_values <- mcmc_init_two(y = Y, G = G, num_topics = 3, length_scales_lambda = rep(10, 3), 
+                                var_scales_lambda = rep(1, 3), 
+                                length_scales_phi = rep(10, 3), 
+                                var_scales_phi = rep(1, 3))
+a=aladynoulli(Y, G, n_topics = 3,nburnin = 1000,nsamples = 1000,n_iters = 1000,initial_values = initial_values)
 

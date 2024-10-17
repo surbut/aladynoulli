@@ -4,14 +4,15 @@ library(rsvd)  # For fast randomized SVD
 library(mgcv) 
 
 
-aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,n_iters){
+aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,n_iters,initial_values,step_size_lambda=0.01, step_size_phi=0.01, target_accept_rate = 0.4) {
   
   
-  N <- dim(Y)[1]  # Number of individuals
+  N = n_individuals <- dim(Y)[1]  # Number of individuals
   D <- dim(Y)[2]  # Number of diseases
   Ttot <- dim(Y)[3]  # Number of time points
   P <- ncol(G)  # Number of genetic covariates
   K <- n_topics   # Number of topics
+  n_diseases=D
   
   
   # Matrix of indexed to ignore. 
@@ -22,8 +23,12 @@ aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,n_iters){
   precomputed_indices <- precompute_likelihood_indices(Y)
   
   # Here you initialize the MCMC
-  initial_values <- mcmc_init_two(y = Y, G = G)
+  #initial_values <- mcmc_init_two(y = Y, G = G)
   current_state=initial_values
+  var_scales_lambda=current_state$var_scales_lambda
+  length_scales_lambda=current_state$length_scales_lambda
+  var_scales_phi=current_state$var_scales_phi
+  length_scales_phi=current_state$length_scales_phi
 
   K_lambda <- lapply(1:n_topics, function(k) {
     time_diff_matrix <- outer(1:Ttot, 1:Ttot, "-") ^ 2
@@ -92,6 +97,8 @@ aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,n_iters){
         proposed_log_lik <- compute_log_likelihood(proposed_Lambda,
                                                    current_state$Phi,
                                                    precomputed_indices)
+        
+        mean_lambda=rep(G[i, ] %*% current_state$Gamma[k, ],Ttot)
         
         current_log_prior_lambda <- log_gp_prior_vec(
           current_state$Lambda[i, k, ],
@@ -178,7 +185,7 @@ aladynoulli <- function(Y, G, n_topics = 3, nsamples, nburnin,n_iters){
       posterior_mean <- rep(0, P)  # Prior mean
       
       for (i in 1:N) {
-        Xi <- matrix(rep(g_i[i, ], Ttot), nrow = Ttot, byrow = TRUE)  # T x P matrix
+        Xi <- matrix(rep(G[i, ], Ttot), nrow = Ttot, byrow = TRUE)  # T x P matrix
         precision_contrib <- t(Xi) %*% K_inv %*% Xi
         posterior_precision <- posterior_precision + precision_contrib
         posterior_mean <- posterior_mean + t(Xi) %*% K_inv %*% Lambda_k[i, ]
