@@ -120,7 +120,7 @@ update_lambda <- function(Lambda, Phi, Y, K_inv_lambda, i, k, t, epsilon) {
 update_phi <- function(Lambda, Phi, Y, K_inv_phi, k, d, t, epsilon) {
   grad_likelihood <- compute_gradient_log_likelihood_phi(Lambda, Phi, Y, k, d, t)
   grad_prior <- (K_inv_phi %*% Phi[k,d,])[t]
-  full_grad <- grad_likelihood - grad_prior
+  full_grad <- grad_likelihood - grad_prior ## bc you're differentiatng w.r.t theta
   
   eta <- rnorm(1, 0, sqrt(epsilon))
   Phi[k,d,t] <- Phi[k,d,t] + 0.5 * epsilon * full_grad + eta
