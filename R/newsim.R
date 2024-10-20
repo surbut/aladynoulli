@@ -7,7 +7,6 @@ create_increasing_trend <- function(start, end, T) {
 }
 
 
-## thinkin about trying for 2 disease
 
 generate_tensor_data <- function(N = 1000, D = 5, T = 50, K = 3, num_covariates = 5) {
   library(mvtnorm)
@@ -29,8 +28,8 @@ generate_tensor_data <- function(N = 1000, D = 5, T = 50, K = 3, num_covariates 
   var_scales_lambda <- runif(K, 0.8, 1.2)
   length_scales_phi <- runif(K, T / 3, T / 2)
   var_scales_phi <- runif(K, 0.8, 1.2)
-  
-  
+
+
   
   
   
@@ -38,13 +37,12 @@ generate_tensor_data <- function(N = 1000, D = 5, T = 50, K = 3, num_covariates 
   mu_d <- array(NA, dim = c(D, T))
   for (d in 1:D) {
     time_points <- seq(0, 1, length.out = T)
-    base_trend <- create_increasing_trend(qlogis(0.01), qlogis(0.2), T)
-    
+    base_trend <- create_increasing_trend(qlogis(0.01), qlogis(0.05), T)
+
     # Add some randomness to the trend
-    cov_matrix_mu <- exp(-0.5 * 0.1 * outer(time_points, time_points, "-") ^
-                           2)
+    cov_matrix_mu <- exp(-0.5 * 0.1 * outer(time_points, time_points, "-")^2)
     random_effect <- mvrnorm(1, mu = rep(0, T), Sigma = cov_matrix_mu)
-    mu_d[d, ] <- base_trend + random_effect * 0.5
+    mu_d[d, ] <- base_trend + random_effect 
   }
   
   # Generate lambda, phi matrices
@@ -57,22 +55,20 @@ generate_tensor_data <- function(N = 1000, D = 5, T = 50, K = 3, num_covariates 
   for (k in 1:K) {
     cov_matrix <- exp(-0.5 * var_scales_lambda[k] * (time_diff ^ 2) / length_scales_lambda[k] ^ 2)
     for (i in 1:N) {
-      #mean_lambda <- g_i[i, ] %*% Gamma_k[k, ]
-      mean_lambda = 0
+      mean_lambda <- g_i[i, ] %*% Gamma_k[k, ]
       lambda_ik[i, k, ] <- mvrnorm(1, mu = rep(mean_lambda, T), Sigma = cov_matrix)
     }
   }
   
   # Apply softmax to lambda
-  theta <- apply(lambda_ik, c(1, 3), function(x)
-    exp(x) / sum(exp(x)))
-  theta <- aperm(theta, c(2, 1, 3))  # Reorder dimensions to match original lambda_ik
+  theta <- apply(lambda_ik, c(1,3), function(x) exp(x) / sum(exp(x)))
+  theta <- aperm(theta, c(2,1,3))  # Reorder dimensions to match original lambda_ik
   
   # Simulate phi
   for (k in 1:K) {
     cov_matrix <- exp(-0.5 * var_scales_phi[k] * (time_diff ^ 2) / length_scales_phi[k] ^ 2)
     for (d in 1:D) {
-      phi_kd[k, d, ] <- mvrnorm(1, mu = mu_d[d, ], Sigma = cov_matrix) ## maximum rank of this matrix is Ttot
+      phi_kd[k, d, ] <- mvrnorm(1, mu = mu_d[d,], Sigma = cov_matrix) ## maximum rank of this matrix is Ttot
     }
   }
   
@@ -93,7 +89,7 @@ generate_tensor_data <- function(N = 1000, D = 5, T = 50, K = 3, num_covariates 
   for (i in 1:N) {
     for (d in 1:D) {
       for (t in 1:T) {
-        if (t == 1 || sum(Y[i, d, 1:(t - 1)]) == 0) {
+        if (t == 1 || sum(Y[i, d, 1:(t-1)]) == 0) {
           # Disease hasn't occurred yet
           pi_values[i, d, t] <- pi_temp[i, d, t]
           
