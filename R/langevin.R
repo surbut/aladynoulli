@@ -12,67 +12,122 @@ sigmoid <- function(x) {
   1 / (1 + exp(-x))
 }
 
-# Initialization function (your existing function)
 
-# Gradient computation functions
-compute_gradient_log_likelihood_lambda <- function(Lambda, Phi, Y, i, k, t) {
+
+# Gradient computation functions per element
+# compute_gradient_log_likelihood_lambda <- function(Lambda, Phi, Y, i, k, t) {
+#   D <- dim(Phi)[2]
+#   K <- dim(Lambda)[2]
+#   
+#   gradient <- 0
+#   for (d in 1:D) {
+#     theta <- softmax(Lambda[i,,t])
+#     pi_idt <- sum(theta * sigmoid(Phi[,d,t]))
+#     dL_dpi <- Y[i,d,t]/pi_idt - (1-Y[i,d,t])/(1-pi_idt)
+#     dpi_dlambda <- sigmoid(Phi[k,d,t]) * theta[k] * (1 - theta[k])
+#     gradient <- gradient + dL_dpi * dpi_dlambda
+#   }
+#   
+#   return(gradient)
+# }
+# 
+# compute_gradient_log_likelihood_phi <- function(Lambda, Phi, Y, k, d, t) {
+#   N <- dim(Lambda)[1]
+#   
+#   gradient <- 0
+#   for (i in 1:N) {
+#     theta <- softmax(Lambda[i,,t])
+#     pi_idt <- sum(theta * sigmoid(Phi[,d,t]))
+#     dL_dpi <- Y[i,d,t]/pi_idt - (1-Y[i,d,t])/(1-pi_idt)
+#     dpi_dphi <- theta[k] * sigmoid(Phi[k,d,t]) * (1 - sigmoid(Phi[k,d,t]))
+#     gradient <- gradient + dL_dpi * dpi_dphi
+#   }
+#   
+#   return(gradient)
+# }
+# 
+# compute_gradient_log_prior_lambda <- function(Lambda_i, K_inv_lambda) {
+#   return(-K_inv_lambda %*% Lambda_i)
+# }
+# 
+# compute_gradient_log_prior_phi <- function(Phi_k, K_inv_phi) {
+#   return(-K_inv_phi %*% Phi_k)
+# }
+# 
+# # SGLD update functions
+# update_lambda <- function(Lambda, Phi, Y, K_inv_lambda, i, k, t, epsilon) {
+#   grad_likelihood <- compute_gradient_log_likelihood_lambda(Lambda, Phi, Y, i, k, t)
+#   grad_prior <- (K_inv_lambda %*% Lambda[i,k,])[t]
+#   full_grad <- grad_likelihood - grad_prior
+#   
+#   eta <- rnorm(1, 0, sqrt(epsilon))
+#   Lambda[i,k,t] <- Lambda[i,k,t] + 0.5 * epsilon * full_grad + eta
+#   
+#   return(Lambda)
+# }
+# 
+# update_phi <- function(Lambda, Phi, Y, K_inv_phi, k, d, t, epsilon) {
+#   grad_likelihood <- compute_gradient_log_likelihood_phi(Lambda, Phi, Y, k, d, t)
+#   grad_prior <- (K_inv_phi %*% Phi[k,d,])[t]
+#   full_grad <- grad_likelihood - grad_prior ## bc you're differentiatng w.r.t theta
+#   
+#   eta <- rnorm(1, 0, sqrt(epsilon))
+#   Phi[k,d,t] <- Phi[k,d,t] + 0.5 * epsilon * full_grad + eta
+#   
+#   return(Phi)
+# }
+
+### Now do for the whole vector 
+compute_gradient_log_likelihood_lambda <- function(Lambda, Phi, Y, i, k) {
   D <- dim(Phi)[2]
   K <- dim(Lambda)[2]
+  Ttot <- dim(Lambda)[3]
   
-  gradient <- 0
-  for (d in 1:D) {
-    theta <- softmax(Lambda[i,,t])
-    pi_idt <- sum(theta * sigmoid(Phi[,d,t]))
-    dL_dpi <- Y[i,d,t]/pi_idt - (1-Y[i,d,t])/(1-pi_idt)
-    dpi_dlambda <- sigmoid(Phi[k,d,t]) * theta[k] * (1 - theta[k])
-    gradient <- gradient + dL_dpi * dpi_dlambda
-  }
+  theta <- apply(Lambda[i,,], 2, softmax)  # K x Ttot matrix
+  pi_id <- t(theta) %*% sigmoid(Phi[,,])  # Ttot x D matrix
+  
+  dL_dpi <- Y[i,,] / pi_id - (1 - Y[i,,]) / (1 - pi_id)  # Ttot x D matrix
+  dpi_dlambda <- sigmoid(Phi[k,,]) * theta[k,] * (1 - theta[k,])  # Ttot x D matrix
+  
+  gradient <- rowSums(dL_dpi * dpi_dlambda)  # Ttot-length vector
   
   return(gradient)
 }
 
-compute_gradient_log_likelihood_phi <- function(Lambda, Phi, Y, k, d, t) {
+compute_gradient_log_likelihood_phi <- function(Lambda, Phi, Y, k, d) {
   N <- dim(Lambda)[1]
+  Ttot <- dim(Lambda)[3]
   
-  gradient <- 0
-  for (i in 1:N) {
-    theta <- softmax(Lambda[i,,t])
-    pi_idt <- sum(theta * sigmoid(Phi[,d,t]))
-    dL_dpi <- Y[i,d,t]/pi_idt - (1-Y[i,d,t])/(1-pi_idt)
-    dpi_dphi <- theta[k] * sigmoid(Phi[k,d,t]) * (1 - sigmoid(Phi[k,d,t]))
-    gradient <- gradient + dL_dpi * dpi_dphi
-  }
+  theta <- apply(Lambda[,,], c(2,3), softmax)  # K x N x Ttot array
+  pi_idt <- apply(theta * sigmoid(Phi[,,d]), c(2,3), sum)  # N x Ttot matrix
+  
+  dL_dpi <- Y[,,d] / pi_idt - (1 - Y[,,d]) / (1 - pi_idt)  # N x Ttot matrix
+  dpi_dphi <- theta[k,,] * sigmoid(Phi[k,d,]) * (1 - sigmoid(Phi[k,d,]))  # N x Ttot matrix
+  
+  gradient <- colSums(dL_dpi * dpi_dphi)  # Ttot-length vector
   
   return(gradient)
 }
 
-compute_gradient_log_prior_lambda <- function(Lambda_i, K_inv_lambda) {
-  return(-K_inv_lambda %*% Lambda_i)
-}
-
-compute_gradient_log_prior_phi <- function(Phi_k, K_inv_phi) {
-  return(-K_inv_phi %*% Phi_k)
-}
-
-# SGLD update functions
-update_lambda <- function(Lambda, Phi, Y, K_inv_lambda, i, k, t, epsilon) {
-  grad_likelihood <- compute_gradient_log_likelihood_lambda(Lambda, Phi, Y, i, k, t)
-  grad_prior <- (K_inv_lambda %*% Lambda[i,k,])[t]
+# Update functions
+update_lambda <- function(Lambda, Phi, Y, K_inv_lambda, i, k, epsilon) {
+  grad_likelihood <- compute_gradient_log_likelihood_lambda(Lambda, Phi, Y, i, k)
+  grad_prior <- K_inv_lambda %*% Lambda[i,k,]
   full_grad <- grad_likelihood - grad_prior
   
-  eta <- rnorm(1, 0, sqrt(epsilon))
-  Lambda[i,k,t] <- Lambda[i,k,t] + 0.5 * epsilon * full_grad + eta
+  eta <- rnorm(length(full_grad), 0, sqrt(epsilon))
+  Lambda[i,k,] <- Lambda[i,k,] + 0.5 * epsilon * full_grad + eta
   
   return(Lambda)
 }
 
-update_phi <- function(Lambda, Phi, Y, K_inv_phi, k, d, t, epsilon) {
-  grad_likelihood <- compute_gradient_log_likelihood_phi(Lambda, Phi, Y, k, d, t)
-  grad_prior <- (K_inv_phi %*% Phi[k,d,])[t]
-  full_grad <- grad_likelihood - grad_prior ## bc you're differentiatng w.r.t theta
+update_phi <- function(Lambda, Phi, Y, K_inv_phi, k, d, epsilon) {
+  grad_likelihood <- compute_gradient_log_likelihood_phi(Lambda, Phi, Y, k, d)
+  grad_prior <- K_inv_phi %*% Phi[k,d,]
+  full_grad <- grad_likelihood - grad_prior
   
-  eta <- rnorm(1, 0, sqrt(epsilon))
-  Phi[k,d,t] <- Phi[k,d,t] + 0.5 * epsilon * full_grad + eta
+  eta <- rnorm(length(full_grad), 0, sqrt(epsilon))
+  Phi[k,d,] <- Phi[k,d,] + 0.5 * epsilon * full_grad + eta
   
   return(Phi)
 }
