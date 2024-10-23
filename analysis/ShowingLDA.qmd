@@ -1,6 +1,19 @@
 ---
 title: "RUnning LDA"
-format: html
+format:
+  html:
+    toc: true
+    toc-location: body
+date: "1020204"
+author:
+  - name: "Sarah Urbut"
+embed-resources: true
+toc: true
+toc-expand: 2
+toc-title: Contents
+page-layout: full
+code-fold: true
+editor: visual
 ---
 
 ## Quarto
@@ -15,7 +28,7 @@ I show the induced sparsity (max mu_d = 0.02 in this simulation)
 ```{r, warning=FALSE, message=FALSE}
 library(topicmodels)
 library(ggplot2)
-source("../Rscripts/simulations/newsim.R")
+source("../R/newsim.R")
 # Assuming 'Y' is the array of N individuals, D diseases, and T time points from your data generation
 data <- generate_tensor_data(N = 100, D = 5, T = 10, K = 3,num_covariates = 2)
 plot_individuals(data$S,num_individuals = 3)
@@ -51,7 +64,7 @@ Y_long <- reshape2::melt(Y_df, id.vars = "Disease")
 ggplot(Y_long, aes(x = variable, y = Disease, fill = value)) +
   geom_tile() +
   scale_fill_gradient(low = "white", high = "blue") +  # Adjust the color gradient
-  labs(x = "Individual", y = "Disease", title = "Summed data for Diseases") +
+  labs(y = "Individual", x = "Disease", title = "Summed data for Diseases") +
   theme_minimal()
 ```
 
