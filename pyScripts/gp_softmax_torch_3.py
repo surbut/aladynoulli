@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 
 
 class AladynSurvivalModel(nn.Module):
-    def __init__(self, N, D, T, K, P, G, Y, prevalence):
+    def __init__(self, N, D, T, K, P, G, Y, length_scales, amplitudes, prevalence):
         super().__init__()
         self.N = N  # Number of individuals
         self.D = D  # Number of diseases
@@ -25,9 +25,21 @@ class AladynSurvivalModel(nn.Module):
         # Compute logit of prevalence for centering phi
         self.logit_prev = torch.log(self.prevalence / (1 - self.prevalence))  # (D)
 
-        # Initialize GP kernel hyperparameters with more stable values
-        self.length_scales = nn.Parameter(torch.tensor(np.full(K, T / 3), dtype=torch.float32))
-        self.log_amplitudes = nn.Parameter(torch.zeros(K, dtype=torch.float32))  # Start at amplitude = 1.0
+        # Create time grid and squared distances for kernel computation
+        times = np.arange(T)
+        sq_dists = squareform(pdist(times.reshape(-1, 1)) ** 2)
+        self.times = torch.tensor(times, dtype=torch.float32)
+
+        # Initialize GP kernels for lambda and phi
+        self.K_lambda = []
+        self.K_phi = []
+        for k in range(K):
+            # RBF kernel for lambda
+            K_lambda_k = amplitudes[k] * np.exp(-0.5 * sq_dists / (length_scales[k] ** 2))
+            self.K_lambda.append(torch.tensor(K_lambda_k + 1e-6 * np.eye(T), dtype=torch.float32))
+
+            # RBF kernel for phi (using same length scales and amplitudes)
+            self.K_phi.append(torch.tensor(K_lambda_k + 1e-6 * np.eye(T), dtype=torch.float32))
 
         # Initialize parameters
         self.initialize_params()
@@ -48,55 +60,26 @@ class AladynSurvivalModel(nn.Module):
 
         # Initialize lambda using GP prior
         lambda_means = self.G @ self.gamma  # N x K
-        self.lambda_ = nn.Parameter(torch.zeros((self.N, self.K, self.T)))  # N x K x T
-
-        # Initialize phi using GP prior
-        self.phi = nn.Parameter(torch.zeros((self.K, self.D, self.T)))  # K x D x T
-
-        # Initialize covariance matrices
-        self.update_kernels()
-
-        # Sample initial values for lambda and phi from the GPs
+        lambda_init = torch.zeros((self.N, self.K, self.T))
         for k in range(self.K):
-            # Cholesky decomposition
             L_k = torch.linalg.cholesky(self.K_lambda[k])
-            L_k_phi = torch.linalg.cholesky(self.K_phi[k])
-
-            # Sample lambda
             for i in range(self.N):
                 mean = lambda_means[i, k]
                 eps = L_k @ torch.randn(self.T)
-                self.lambda_.data[i, k, :] = mean + eps
+                lambda_init[i, k, :] = mean + eps
+        self.lambda_ = nn.Parameter(lambda_init)  # N x K x T
 
-            # Sample phi
+        # Initialize phi using GP prior
+        phi_init = torch.zeros((self.K, self.D, self.T))
+        for k in range(self.K):
+            L_k_phi = torch.linalg.cholesky(self.K_phi[k])
             for d in range(self.D):
                 mean = self.logit_prev[d]
                 eps = L_k_phi @ torch.randn(self.T)
-                self.phi.data[k, d, :] = mean + eps
-
-    def update_kernels(self):
-        """Update covariance matrices based on current length scales and amplitudes"""
-        times = torch.arange(self.T, dtype=torch.float32)
-        sq_dists = (times.unsqueeze(0) - times.unsqueeze(1)) ** 2  # T x T
-
-        self.K_lambda = []
-        self.K_phi = []
-        for k in range(self.K):
-            length_scale = self.length_scales[k]
-            amplitude = torch.exp(self.log_amplitudes[k])
-
-            # RBF kernel for lambda
-            K_lambda_k = amplitude ** 2 * torch.exp(-0.5 * sq_dists / length_scale ** 2)
-            self.K_lambda.append(K_lambda_k + 1e-6 * torch.eye(self.T))
-
-            # RBF kernel for phi (using the same hyperparameters)
-            K_phi_k = amplitude ** 2 * torch.exp(-0.5 * sq_dists / length_scale ** 2)
-            self.K_phi.append(K_phi_k + 1e-6 * torch.eye(self.T))
+                phi_init[k, d, :] = mean + eps
+        self.phi = nn.Parameter(phi_init)  # K x D x T
 
     def forward(self):
-        # Update kernels (in case hyperparameters have changed)
-        self.update_kernels()
-
         # Compute theta using softmax over topics (N x K x T)
         theta = torch.softmax(self.lambda_, dim=1)  # N x K x T
 
@@ -118,75 +101,78 @@ class AladynSurvivalModel(nn.Module):
         epsilon = 1e-8
         pi = torch.clamp(pi, epsilon, 1 - epsilon)
 
-        N, D, T = self.Y.shape
+        # Initialize loss
+        loss = 0.0
+
+        # Convert event_times to tensor
         event_times_tensor = torch.tensor(event_times, dtype=torch.long)
 
-        # Create masks for events and censoring
-        time_grid = torch.arange(T).unsqueeze(0).unsqueeze(0)  # 1 x 1 x T
-        event_times_expanded = event_times_tensor.unsqueeze(-1)  # N x D x 1
+        # Vectorized computation of loss
+        N, D, T = self.Y.shape
 
-        # Mask for times before the event
-        mask_before_event = (time_grid < event_times_expanded).float()  # N x D x T
-        # Mask for event time
-        mask_at_event = (time_grid == event_times_expanded).float()  # N x D x T
+        # Create time indices
+        time_indices = torch.arange(T)
 
-        # Compute loss components
-        loss_censored = -torch.sum(torch.log(1 - pi) * mask_before_event)
-        loss_event = -torch.sum(torch.log(pi) * mask_at_event * self.Y)
-        loss_no_event = -torch.sum(torch.log(1 - pi) * mask_at_event * (1 - self.Y))
+        # Compute loss for each individual and disease
+        for n in range(N):
+            for d in range(D):
+                t_event = event_times_tensor[n, d]
+                if t_event < T:
+                    # Times before the event
+                    pi_censored = pi[n, d, :t_event]
+                    loss -= torch.sum(torch.log(1 - pi_censored))
 
-        total_data_loss = loss_censored + loss_event + loss_no_event
+                    # At the event time
+                    if self.Y[n, d, t_event] == 1:
+                        pi_event = pi[n, d, t_event]
+                        loss -= torch.log(pi_event)
+                    else:
+                        # If no event occurred at t_event, treat as censored
+                        pi_censored = pi[n, d, t_event]
+                        loss -= torch.log(1 - pi_censored)
+                else:
+                    # Censored observation
+                    pi_censored = pi[n, d, :]
+                    loss -= torch.sum(torch.log(1 - pi_censored))
 
-        # GP prior loss remains the same
+        # Add GP prior losses for lambda and phi
         gp_loss = self.compute_gp_prior_loss()
-        total_loss = total_data_loss + gp_loss
+
+        total_loss = loss + gp_loss
         return total_loss
 
     def compute_gp_prior_loss(self):
         """
-        Compute the GP prior loss for lambda and phi using Cholesky decomposition.
+        Compute the GP prior loss for lambda and phi.
         """
         gp_loss = 0.0
         N, K, T = self.lambda_.shape
         K, D, T = self.phi.shape
 
         for k in range(K):
-            # Cholesky decomposition
-            L_lambda = torch.linalg.cholesky(self.K_lambda[k])  # T x T
-            L_phi = torch.linalg.cholesky(self.K_phi[k])       # T x T
+            # Inverse of covariance matrices with regularization
+            K_lambda_inv = torch.inverse(self.K_lambda[k] + 1e-6 * torch.eye(self.T))
+            K_phi_inv = torch.inverse(self.K_phi[k] + 1e-6 * torch.eye(self.T))
 
             # Lambda GP prior
             lambda_k = self.lambda_[:, k, :]  # N x T
             mean_lambda_k = (self.G @ self.gamma[:, k]).unsqueeze(1)  # N x 1
             deviations_lambda = lambda_k - mean_lambda_k  # N x T
-
-            # Process each individual separately to maintain correct dimensions
-            for i in range(N):
-                dev_i = deviations_lambda[i:i+1].T  # T x 1
-                v_i = torch.cholesky_solve(dev_i, L_lambda)  # T x 1
-                gp_loss += 0.5 * torch.sum(v_i.T @ dev_i)
+            gp_loss += 0.5 * torch.sum(deviations_lambda @ K_lambda_inv * deviations_lambda)
 
             # Phi GP prior
             phi_k = self.phi[k, :, :]  # D x T
             mean_phi_k = self.logit_prev.unsqueeze(1)  # D x 1
             deviations_phi = phi_k - mean_phi_k  # D x T
-
-            # Process each disease separately
-            for d in range(D):
-                dev_d = deviations_phi[d:d+1].T  # T x 1
-                v_d = torch.cholesky_solve(dev_d, L_phi)  # T x 1
-                gp_loss += 0.5 * torch.sum(v_d.T @ dev_d)
+            gp_loss += 0.5 * torch.sum(deviations_phi @ K_phi_inv * deviations_phi)
 
         return gp_loss
 
-    def fit(self, event_times, num_epochs=100, learning_rate=1e-3, lambda_reg=1e-2):
+    def fit(self, event_times, num_epochs=100, learning_rate=1e-3):
         """
-        Fit the model using gradient descent with L2 regularization on gamma.
+        Fit the model using gradient descent.
         """
-        optimizer = optim.Adam([
-            {'params': [self.lambda_, self.phi, self.length_scales, self.log_amplitudes]},
-            {'params': [self.gamma], 'weight_decay': lambda_reg}
-        ], lr=learning_rate)
+        optimizer = optim.Adam(self.parameters(), lr=learning_rate)
 
         losses = []
 
@@ -234,7 +220,7 @@ def generate_synthetic_data(N=100, D=5, T=50, K=3, P=5, return_true_params=False
     Gamma_k = np.random.randn(P, K)
     lambda_ik = np.zeros((N, K, T))
     for k in range(K):
-        cov_matrix = amplitudes[k] ** 2 * np.exp(-0.5 * (time_diff ** 2) / length_scales[k] ** 2)
+        cov_matrix = amplitudes[k] * np.exp(-0.5 * (time_diff ** 2) / length_scales[k] ** 2)
         for i in range(N):
             mean_lambda = G[i] @ Gamma_k[:, k]
             lambda_ik[i, k, :] = multivariate_normal.rvs(mean=mean_lambda * np.ones(T), cov=cov_matrix)
@@ -246,7 +232,7 @@ def generate_synthetic_data(N=100, D=5, T=50, K=3, P=5, return_true_params=False
     # Simulate phi (topic-disease trajectories)
     phi_kd = np.zeros((K, D, T))
     for k in range(K):
-        cov_matrix = amplitudes[k] ** 2 * np.exp(-0.5 * (time_diff ** 2) / length_scales[k] ** 2)
+        cov_matrix = amplitudes[k] * np.exp(-0.5 * (time_diff ** 2) / length_scales[k] ** 2)
         for d in range(D):
             mean_phi = np.log(prevalence[d]) * np.ones(T)
             phi_kd[k, d, :] = multivariate_normal.rvs(mean=mean_phi, cov=cov_matrix)
@@ -284,8 +270,5 @@ def generate_synthetic_data(N=100, D=5, T=50, K=3, P=5, return_true_params=False
             'pi': pi
         }
     else:
-        return Y, G, prevalence, event_times
-
-
-
+        return Y, G, prevalence, length_scales, amplitudes, event_times
 
