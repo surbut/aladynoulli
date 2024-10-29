@@ -49,7 +49,7 @@ generate_tensor_data <- function(N = 1000, D = 5, T = 50, K = 3, num_covariates 
   g_i <- array(rnorm(num_covariates * N), dim = c(N, num_covariates))
   lambda_ik <- array(NA, dim = c(N, K, T))
   phi_kd <- array(NA, dim = c(K, D, T))
-  Gamma_k <- matrix(rnorm(num_covariates * K), nrow = K, ncol = num_covariates)
+  Gamma_k <- matrix(rnorm(rep(1,(num_covariates * K)), nrow = K, ncol = num_covariates))
   
   # Simulate lambda
   for (k in 1:K) {

@@ -2,13 +2,15 @@ library(rsvd)  # For fast randomized SVD
 library(mgcv)  # For Gaussian Process utilities
 library(MASS)  # For mvrnorm function
 
-# Helper functions
+# Helper functions with numerical stability
 softmax <- function(x) {
+  x <- pmin(pmax(x, -100), 100)  # Clip values
   exp_x <- exp(x - max(x))
   exp_x / sum(exp_x)
 }
 
 sigmoid <- function(x) {
+  x <- pmin(pmax(x, -100), 100)  # Clip values
   1 / (1 + exp(-x))
 }
 
@@ -83,13 +85,19 @@ compute_gradient_log_likelihood_lambda <- function(Lambda, Phi, Y, i, k) {
   K <- dim(Lambda)[2]
   Ttot <- dim(Lambda)[3]
   
-  theta <- apply(Lambda[i,,], 2, softmax)  # K x Ttot matrix
-  pi_id <- t(theta) %*% sigmoid(Phi[,,])  # Ttot x D matrix
+  # Initialize gradient vector
+  gradient <- numeric(Ttot)
   
-  dL_dpi <- Y[i,,] / pi_id - (1 - Y[i,,]) / (1 - pi_id)  # Ttot x D matrix
-  dpi_dlambda <- sigmoid(Phi[k,,]) * theta[k,] * (1 - theta[k,])  # Ttot x D matrix
-  
-  gradient <- rowSums(dL_dpi * dpi_dlambda)  # Ttot-length vector
+  # Compute for each time point
+  for(t in 1:Ttot) {
+    theta <- softmax(Lambda[i,,t])  # K-dimensional vector
+    pi_id <- sapply(1:D, function(d) sum(theta * sigmoid(Phi[,d,t])))  # D-dimensional vector
+    
+    dL_dpi <- Y[i,,t] / pi_id - (1 - Y[i,,t]) / (1 - pi_id)  # D-dimensional vector
+    dpi_dlambda <- sapply(1:D, function(d) sigmoid(Phi[k,d,t]) * theta[k] * (1 - theta[k]))  # D-dimensional vector
+    
+    gradient[t] <- sum(dL_dpi * dpi_dlambda)
+  }
   
   return(gradient)
 }
@@ -98,25 +106,40 @@ compute_gradient_log_likelihood_phi <- function(Lambda, Phi, Y, k, d) {
   N <- dim(Lambda)[1]
   Ttot <- dim(Lambda)[3]
   
-  theta <- apply(Lambda[,,], c(2,3), softmax)  # K x N x Ttot array
-  pi_idt <- apply(theta * sigmoid(Phi[,,d]), c(2,3), sum)  # N x Ttot matrix
+  # Initialize gradient vector
+  gradient <- numeric(Ttot)
   
-  dL_dpi <- Y[,,d] / pi_idt - (1 - Y[,,d]) / (1 - pi_idt)  # N x Ttot matrix
-  dpi_dphi <- theta[k,,] * sigmoid(Phi[k,d,]) * (1 - sigmoid(Phi[k,d,]))  # N x Ttot matrix
-  
-  gradient <- colSums(dL_dpi * dpi_dphi)  # Ttot-length vector
+  # Compute for each time point
+  for(t in 1:Ttot) {
+    theta <- sapply(1:N, function(i) softmax(Lambda[i,,t]))  # K x N matrix
+    pi_idt <- sapply(1:N, function(i) sum(theta[,i] * sigmoid(Phi[,d,t])))  # N-dimensional vector
+    
+    dL_dpi <- Y[,d,t] / pi_idt - (1 - Y[,d,t]) / (1 - pi_idt)  # N-dimensional vector
+    dpi_dphi <- sapply(1:N, function(i) theta[k,i] * sigmoid(Phi[k,d,t]) * (1 - sigmoid(Phi[k,d,t])))  # N-dimensional vector
+    
+    gradient[t] <- sum(dL_dpi * dpi_dphi)
+  }
   
   return(gradient)
 }
 
-# Update functions
+# Update functions with smaller step sizes and value clipping
 update_lambda <- function(Lambda, Phi, Y, K_inv_lambda, i, k, epsilon) {
   grad_likelihood <- compute_gradient_log_likelihood_lambda(Lambda, Phi, Y, i, k)
   grad_prior <- K_inv_lambda %*% Lambda[i,k,]
+  
+  # Clip gradients
+  grad_likelihood <- pmin(pmax(grad_likelihood, -100), 100)
+  grad_prior <- pmin(pmax(grad_prior, -100), 100)
+  
   full_grad <- grad_likelihood - grad_prior
   
-  eta <- rnorm(length(full_grad), 0, sqrt(epsilon))
+  # Smaller noise term
+  eta <- rnorm(length(full_grad), 0, sqrt(epsilon) * 0.1)
+  
+  # Update with clipping
   Lambda[i,k,] <- Lambda[i,k,] + 0.5 * epsilon * full_grad + eta
+  Lambda[i,k,] <- pmin(pmax(Lambda[i,k,], -10), 10)  # Clip values
   
   return(Lambda)
 }
@@ -124,10 +147,19 @@ update_lambda <- function(Lambda, Phi, Y, K_inv_lambda, i, k, epsilon) {
 update_phi <- function(Lambda, Phi, Y, K_inv_phi, k, d, epsilon) {
   grad_likelihood <- compute_gradient_log_likelihood_phi(Lambda, Phi, Y, k, d)
   grad_prior <- K_inv_phi %*% Phi[k,d,]
+  
+  # Clip gradients
+  grad_likelihood <- pmin(pmax(grad_likelihood, -100), 100)
+  grad_prior <- pmin(pmax(grad_prior, -100), 100)
+  
   full_grad <- grad_likelihood - grad_prior
   
-  eta <- rnorm(length(full_grad), 0, sqrt(epsilon))
+  # Smaller noise term
+  eta <- rnorm(length(full_grad), 0, sqrt(epsilon) * 0.1)
+  
+  # Update with clipping
   Phi[k,d,] <- Phi[k,d,] + 0.5 * epsilon * full_grad + eta
+  Phi[k,d,] <- pmin(pmax(Phi[k,d,], -10), 10)  # Clip values
   
   return(Phi)
 }
@@ -170,33 +202,39 @@ aladynoulli_langevin <- function(Y, G, n_topics = 3, n_iters = 1000, step_size_l
   log_priors_lambda <- numeric(n_iters)
   log_priors_phi <- numeric(n_iters)
   
-  # Main MCMC loop
-  for (iter in 1:n_iters) {
-    # Compute log-priors
-    log_prior_lambda <- 0
-    log_prior_phi <- 0
-    for (k in 1:K) {
-      log_prior_lambda <- log_prior_lambda + dmvnorm(as.vector(Lambda[,,k]), mean = rep(0, N*Ttot), sigma = K_lambda[[k]], log = TRUE)
-      log_prior_phi <- log_prior_phi + dmvnorm(as.vector(Phi[k,,]), mean = rep(0, D*Ttot), sigma = K_phi[[k]], log = TRUE)
-    }
-    log_priors_lambda[iter] <- log_prior_lambda
-    log_priors_phi[iter] <- log_prior_phi
+
+    
+    # Main MCMC loop
+    for (iter in 1:n_iters) {
+      # Compute log-priors
+      log_prior_lambda <- 0
+      log_prior_phi <- 0
+      for (k in 1:K) {
+        # For each individual and topic, compute GP prior
+        for (i in 1:N) {
+          log_prior_lambda <- log_prior_lambda + 
+            dmvnorm(Lambda[i,k,], mean = rep(0, Ttot), sigma = K_lambda[[k]], log = TRUE)
+        }
+        # For each disease and topic, compute GP prior
+        for (d in 1:D) {
+          log_prior_phi <- log_prior_phi + 
+            dmvnorm(Phi[k,d,], mean = rep(0, Ttot), sigma = K_phi[[k]], log = TRUE)
+        }
+      }
+      log_priors_lambda[iter] <- log_prior_lambda
+      log_priors_phi[iter] <- log_prior_phi
 
     # Update Lambda
     for (i in 1:N) {
       for (k in 1:K) {
-        for (t in 1:Ttot) {
-          Lambda <- update_lambda(Lambda, Phi, Y, K_inv_lambda[[k]], i, k, t, step_size_lambda)
-        }
+        Lambda <- update_lambda(Lambda, Phi, Y, K_inv_lambda[[k]], i, k, step_size_lambda)
       }
     }
     
     # Update Phi
     for (k in 1:K) {
       for (d in 1:D) {
-        for (t in 1:Ttot) {
-          Phi <- update_phi(Lambda, Phi, Y, K_inv_phi[[k]], k, d, t, step_size_phi)
-        }
+        Phi <- update_phi(Lambda, Phi, Y, K_inv_phi[[k]], k, d, step_size_phi)
       }
     }
     
@@ -205,10 +243,18 @@ aladynoulli_langevin <- function(Y, G, n_topics = 3, n_iters = 1000, step_size_l
       Lambda_k <- Lambda[, k, ]  # N x T matrix for topic k
       K_inv <- K_inv_lambda[[k]]  # T x T inverse covariance matrix
       
-      posterior_precision <- diag(1, P) + t(G) %*% K_inv %*% G
-      posterior_mean <- solve(posterior_precision, t(G) %*% K_inv %*% colMeans(Lambda_k))
+      # For each individual, we have T observations
+      # Need to reshape for the regression
+      posterior_precision <- t(G) %*% G + diag(1, P)  # P x P
+      posterior_mean <- solve(posterior_precision, 
+                            t(G) %*% Lambda_k)  # P x T matrix
       
-      Gamma[k, ] <- mvrnorm(1, mu = posterior_mean, Sigma = solve(posterior_precision))
+      # Sample new Gamma_k
+      for(t in 1:Ttot) {
+        Gamma[k,] <- mvrnorm(1, 
+                            mu = posterior_mean[,t], 
+                            Sigma = solve(posterior_precision))
+      }
     }
     
     # Store samples
@@ -273,3 +319,4 @@ n_topics <- 3
 # 
 # # Plot log-likelihood trace
 # plot(result$log_likelihoods, type = "l", xlab = "Iteration", ylab = "Log-likelihood")
+

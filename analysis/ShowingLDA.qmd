@@ -20,11 +20,10 @@ editor: visual
 
 In this document we will run the LDA model on the data generated in the previous step. We will use the `topicmodels` package to fit the LDA model, averaging our disease counts (max 1) for an individual over time. We will then visualize the results of the LDA model.
 
+## Generate Data
 
-## Generate Data 
+We generate Data with 100 individuals, 5 diseases, 10 time points, and 3 topics (2 genetic features). I show the induced sparsity (max mu_d = 0.02 in this simulation)
 
-We generate Data with 100 individuals, 5 diseases, 10 time points, and 3 topics (2 genetic features).
-I show the induced sparsity (max mu_d = 0.02 in this simulation)
 ```{r, warning=FALSE, message=FALSE}
 library(topicmodels)
 library(ggplot2)
@@ -36,11 +35,8 @@ plot_individuals(data$S,num_individuals = 3)
 
 ## Running LDA
 
-1. Summing across the time dimension (3rd dimension)
-#### Collapse Y along the time dimension to get a matrix of individuals x diseases
- We will have to eliminate folks who have no disease (i.e. rowSums(Y_summed) == 0)
- We can then visualize the data to ensure that we have a count matrix, and plot our average $theta_ik$ and $eta_kd$ values. Recall that for a given topic our $eta_kd$ values need NOT sum to 1 across diseases.
- 
+1.  Summing across the time dimension (3rd dimension) \#### Collapse Y along the time dimension to get a matrix of individuals x diseases We will have to eliminate folks who have no disease (i.e. rowSums(Y_summed) == 0) We can then visualize the data to ensure that we have a count matrix, and plot our average $theta_ik$ and $eta_kd$ values. Recall that for a given topic our $eta_kd$ values need NOT sum to 1 across diseases.
+
 ```{r}
 Y_summed <- apply(data$Y, c(1, 2), sum)
 nullfolks=which(rowSums(Y_summed) == 0) 
@@ -49,7 +45,6 @@ Y_summed=Y_summed[-nullfolks,]# Check and eliminate any individuals with no dise
 theta_summed <- apply(data$theta, c(1, 2), mean)
 eta_summed <- apply(data$eta, c(1, 2), mean)
 ```
-
 
 ```{r}
 
@@ -136,7 +131,6 @@ ggplot(gamma_long, aes(x = variable, y = Topic, fill = value)) +
 
 ```
 
-
 ```{r}
 # Assuming lda_model@beta is a matrix of disease probabilities per topic
 beta_exp <- exp(lda_model@beta)  # If you're using exp to scale the values
@@ -154,4 +148,4 @@ ggplot(beta_long, aes(x = Topic, y = variable, fill = value)) +
   theme_minimal()
 ```
 
-The biggest problem here is that LDA fails to capture the variation in topic distribtuion (we have many folks with high topic variance) because by default it makes beta sum to 1. 
+The biggest problem here is that LDA fails to capture the variation in topic distribtuion (we have many folks with high topic variance) because by default it makes beta sum to 1.

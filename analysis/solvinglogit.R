@@ -20,11 +20,18 @@ initial_values <- mcmc_init_two(y = Y, G = G, num_topics = 3, length_scales_lamb
                                 length_scales_phi = rep(10, 3),
                                 var_scales_phi = rep(1, 3))
 
-a=aladynoulli(Y, G, n_topics = 3,n_iters=5000,
+#a=aladynoulli(Y, G, n_topics = 3,n_iters=5000,
               initial_values=initial_values,step_size_lambda=0.01, step_size_phi=0.01,
               target_accept_rate = 0.2)
-saveRDS(a,"~/Desktop/aladynoulli.rds")
+#saveRDS(a,"~/Desktop/aladynoulli.rds")
+a=readRDS("~/Desktop/aladynoulli.rds")
 a$acceptance_rates
 plot(a$log_posteriors)
 plot(a$log_likelihoods)
+dim(a$samples$Lambda)
+dim(a$samples$Phi)
+dim(a$samples$Gamma)
 
+plot(a$samples$Lambda[,1,1,1])
+
+plot(a$samples$Phi[,1,1,1])

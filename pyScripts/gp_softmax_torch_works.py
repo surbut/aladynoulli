@@ -191,10 +191,10 @@ class AladynSurvivalModel(nn.Module):
         losses = []
 
         for epoch in range(num_epochs):
-            optimizer.zero_grad()
+            optimizer.zero_grad() # 1. Zero the gradients
             loss = self.compute_loss(event_times)
-            loss.backward()
-            optimizer.step()
+            loss.backward() # This computes gradients of the loss with respect to all model parameters using the chain rule (backpropagation). After this step, each parameter in the model has a .grad attribute containing its gradient.
+            optimizer.step() # This updates all model parameters using the computed gradients. For Adam optimizer, it:
 
             losses.append(loss.item())
 
@@ -289,3 +289,142 @@ def generate_synthetic_data(N=100, D=5, T=50, K=3, P=5, return_true_params=False
 
 
 
+def plot_model_fit(model, sim_data, n_samples=5, n_diseases=3):
+    """
+    Plot model fit against true synthetic data for selected individuals and diseases
+    
+    Parameters:
+    model: trained model
+    sim_data: dictionary with true synthetic data
+    n_samples: number of individuals to plot
+    n_diseases: number of diseases to plot
+    """
+    # Get model predictions
+    with torch.no_grad():
+        pi_pred = model.forward().cpu().numpy()
+    
+    # Get true pi from synthetic data
+    pi_true = sim_data['pi']
+    
+    N, D, T = pi_pred.shape
+    time_points = np.arange(T)
+    
+    # Select individuals with varying predictions
+    pi_var = np.var(pi_pred, axis=(1,2))  # Variance across diseases and time
+    sample_idx = np.quantile(np.arange(N), np.linspace(0, 1, n_samples)).astype(int)
+    
+    # Select most variable diseases
+    disease_var = np.var(pi_pred, axis=(0,2))  # Variance across individuals and time
+    disease_idx = np.argsort(-disease_var)[:n_diseases]
+    
+    # Create plots
+    fig, axes = plt.subplots(n_samples, n_diseases, figsize=(4*n_diseases, 4*n_samples))
+    
+    for i, ind in enumerate(sample_idx):
+        for j, dis in enumerate(disease_idx):
+            ax = axes[i,j] if n_samples > 1 and n_diseases > 1 else axes
+            
+            # Plot predicted and true pi
+            ax.plot(time_points, pi_pred[ind, dis, :], 
+                   'b-', label='Predicted', linewidth=2)
+            ax.plot(time_points, pi_true[ind, dis, :], 
+                   'r--', label='True', linewidth=2)
+            
+            ax.set_title(f'Individual {ind}, Disease {dis}')
+            ax.set_xlabel('Time')
+            ax.set_ylabel('Probability')
+            if i == 0 and j == 0:
+                ax.legend()
+    
+    plt.tight_layout()
+    plt.show()
+
+
+
+def plot_random_comparisons(true_pi, pred_pi, n_samples=10, n_cols=2):
+    """
+    Plot true vs predicted pi for random individuals and diseases
+    
+    Parameters:
+    true_pi: numpy array (N×D×T)
+    pred_pi: torch tensor (N×D×T)
+    n_samples: number of random comparisons to show
+    n_cols: number of columns in subplot grid
+    """
+    N, D, T = true_pi.shape
+    pred_pi = pred_pi.detach().numpy()
+    
+    # Generate random indices
+    random_inds = np.random.randint(0, N, n_samples)
+    random_diseases = np.random.randint(0, D, n_samples)
+    
+    # Calculate number of rows needed
+    n_rows = int(np.ceil(n_samples / n_cols))
+    
+    plt.figure(figsize=(6*n_cols, 4*n_rows))
+    
+    for idx in range(n_samples):
+        i = random_inds[idx]
+        d = random_diseases[idx]
+        
+        plt.subplot(n_rows, n_cols, idx+1)
+        
+        # Plot true and predicted
+        plt.plot(true_pi[i,d,:], 'b-', label='True π', linewidth=2)
+        plt.plot(pred_pi[i,d,:], 'r--', label='Predicted π', linewidth=2)
+        
+        plt.title(f'Individual {i}, Disease {d}')
+        plt.xlabel('Time')
+        plt.ylabel('Probability')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.show()
+
+
+
+def plot_best_matches(true_pi, pred_pi, n_samples=10, n_cols=2):
+    """
+    Plot cases where model predictions best match true values
+    
+    Parameters:
+    true_pi: numpy array (N×D×T)
+    pred_pi: torch tensor (N×D×T)
+    """
+    N, D, T = true_pi.shape
+    pred_pi = pred_pi.detach().numpy()
+    
+    # Compute MSE for each individual-disease pair
+    mse = np.mean((true_pi - pred_pi)**2, axis=2)  # N×D
+    
+    # Get indices of best matches
+    best_indices = np.argsort(mse.flatten())[:n_samples]
+    best_pairs = [(idx // D, idx % D) for idx in best_indices]
+    
+    # Plot
+    n_rows = int(np.ceil(n_samples / n_cols))
+    plt.figure(figsize=(6*n_cols, 4*n_rows))
+    
+    for idx, (i, d) in enumerate(best_pairs):
+        plt.subplot(n_rows, n_cols, idx+1)
+        
+        # Plot true and predicted
+        plt.plot(true_pi[i,d,:], 'b-', label='True π', linewidth=2)
+        plt.plot(pred_pi[i,d,:], 'r--', label='Predicted π', linewidth=2)
+        
+        mse_val = mse[i,d]
+        plt.title(f'Individual {i}, Disease {d}\nMSE = {mse_val:.6f}')
+        plt.xlabel('Time')
+        plt.ylabel('Probability')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.show()
+
+# Use after model fitting:
+"""
+pi_pred, theta_pred, phi_pred = model.forward()
+plot_best_matches(true_pi, pi_pred, n_samples=10, n_cols=2)
+"""
