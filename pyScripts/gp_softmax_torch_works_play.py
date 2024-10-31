@@ -141,12 +141,17 @@ class AladynSurvivalModel(nn.Module):
         time_grid = torch.arange(T).unsqueeze(0).unsqueeze(0)  # 1 x 1 x T
         event_times_expanded = event_times_tensor.unsqueeze(-1)  # N x D x 1
 
-        # Mask for times before the event
+        # Mask for times before the event, # Masks automatically handle right-censoring because event_times = T
         mask_before_event = (time_grid < event_times_expanded).float()  # N x D x T
         # Mask for event time
         mask_at_event = (time_grid == event_times_expanded).float()  # N x D x T
 
         # Compute loss components
+         # Loss components work automatically because:
+    # 1. Right-censored (E=T-1, Y=0): contributes to survival up to T-1 and no-event at T-1
+    # 2. Events (E<T-1, Y=1): contributes to survival up to E and event at E
+    # 3. Early censoring (E<T-1, Y=0): contributes to survival up to E and no-event at E
+
         loss_censored = -torch.sum(torch.log(1 - pi) * mask_before_event)
         loss_event = -torch.sum(torch.log(pi) * mask_at_event * self.Y)
         loss_no_event = -torch.sum(torch.log(1 - pi) * mask_at_event * (1 - self.Y))
@@ -162,6 +167,14 @@ class AladynSurvivalModel(nn.Module):
         """
         Compute the GP prior loss for lambda and phi using Cholesky decomposition.
         """
+        print("Shape checks:")
+        print(f"lambda_: {self.lambda_.shape}")  # Should be [N, K, T]
+        print(f"phi: {self.phi.shape}")         # Should be [K, D, T]
+        print(f"K_lambda[0]: {self.K_lambda[0].shape}")  # Should be [T, T]
+        print(f"K_phi[0]: {self.K_phi[0].shape}")       # Should be [T, T]
+        print(f"G: {self.G.shape}")             # Should be [N, P]
+        print(f"gamma: {self.gamma.shape}")      # Should be [P, K]
+        print(f"logit_prev: {self.logit_prev.shape}")  # Should be [D]
         gp_loss = 0.0
         N, K, T = self.lambda_.shape
         K, D, T = self.phi.shape
