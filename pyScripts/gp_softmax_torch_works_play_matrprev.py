@@ -7,9 +7,8 @@ from scipy.special import expit
 from scipy.stats import multivariate_normal
 import matplotlib.pyplot as plt
 
-
 class AladynSurvivalModel(nn.Module):
-    def __init__(self, N, D, T, K, P, G, Y, prevalence):
+    def __init__(self, N, D, T, K, P, G, Y, prevalence_t):
         super().__init__()
         self.N = N  # Number of individuals
         self.D = D  # Number of diseases
@@ -20,14 +19,19 @@ class AladynSurvivalModel(nn.Module):
         # Convert inputs to tensors
         self.G = torch.tensor(G, dtype=torch.float32)            # Genetic covariates (N x P)
         self.Y = torch.tensor(Y, dtype=torch.float32)            # Disease occurrences (N x D x T)
-        self.prevalence = torch.tensor(prevalence, dtype=torch.float32)  # Disease prevalence (D)
-
-        # Compute logit of prevalence for centering phi
-        self.logit_prev = torch.log(self.prevalence / (1 - self.prevalence))  # (D)
+        
+        # Use time-dependent prevalence (D x T)
+        self.prevalence_t = torch.tensor(prevalence_t, dtype=torch.float32)  # Disease prevalence over time
+        
+        # Compute logit of time-dependent prevalence for centering phi
+        epsilon = 1e-8  # To avoid log(0)
+        self.logit_prev_t = torch.log(
+            (self.prevalence_t + epsilon) / (1 - self.prevalence_t + epsilon)
+        )  # (D x T)
 
         # Initialize GP kernel hyperparameters with more stable values
         self.length_scales = nn.Parameter(torch.tensor(np.full(K, T / 3), dtype=torch.float32))
-        self.log_amplitudes = nn.Parameter(torch.zeros(K, dtype=torch.float32))  # Start at amplitude = 1.0
+        self.log_amplitudes = nn.Parameter(torch.zeros(K, dtype=torch.float32))
 
         # Initialize parameters
         self.initialize_params()
@@ -41,24 +45,22 @@ class AladynSurvivalModel(nn.Module):
         U, S, Vh = torch.linalg.svd(Y_avg, full_matrices=False)
 
         # Initialize gamma using genetic covariates
-        lambda_init = U[:, :self.K] @ torch.diag(torch.sqrt(S[:self.K]))  # N x K
-        # Fix the lstsq call
-        gamma_init = torch.linalg.lstsq(self.G, lambda_init).solution  # P x K
-        self.gamma = nn.Parameter(gamma_init)  # P x K
+        lambda_init = U[:, :self.K] @ torch.diag(torch.sqrt(S[:self.K]))
+        gamma_init = torch.linalg.lstsq(self.G, lambda_init).solution
+        self.gamma = nn.Parameter(gamma_init)
 
         # Initialize lambda using GP prior
-        lambda_means = self.G @ self.gamma  # N x K
-        self.lambda_ = nn.Parameter(torch.zeros((self.N, self.K, self.T)))  # N x K x T
+        lambda_means = self.G @ self.gamma
+        self.lambda_ = nn.Parameter(torch.zeros((self.N, self.K, self.T)))
 
-        # Initialize phi using GP prior
-        self.phi = nn.Parameter(torch.zeros((self.K, self.D, self.T)))  # K x D x T
+        # Initialize phi using GP prior with time-dependent mean
+        self.phi = nn.Parameter(torch.zeros((self.K, self.D, self.T)))
 
         # Initialize covariance matrices
         self.update_kernels()
 
         # Sample initial values for lambda and phi from the GPs
         for k in range(self.K):
-            # Cholesky decomposition
             L_k = torch.linalg.cholesky(self.K_lambda[k])
             L_k_phi = torch.linalg.cholesky(self.K_phi[k])
 
@@ -68,9 +70,9 @@ class AladynSurvivalModel(nn.Module):
                 eps = L_k @ torch.randn(self.T)
                 self.lambda_.data[i, k, :] = mean + eps
 
-            # Sample phi
+            # Sample phi with time-dependent mean
             for d in range(self.D):
-                mean = self.logit_prev[d]
+                mean = self.logit_prev_t[d, :]  # Use time-dependent mean
                 eps = L_k_phi @ torch.randn(self.T)
                 self.phi.data[k, d, :] = mean + eps
 
@@ -164,46 +166,31 @@ class AladynSurvivalModel(nn.Module):
         return total_loss
 
     def compute_gp_prior_loss(self):
-        """
-        Compute the GP prior loss for lambda and phi using Cholesky decomposition.
-        """
-        print("Shape checks:")
-        print(f"lambda_: {self.lambda_.shape}")  # Should be [N, K, T]
-        print(f"phi: {self.phi.shape}")         # Should be [K, D, T]
-        print(f"K_lambda[0]: {self.K_lambda[0].shape}")  # Should be [T, T]
-        print(f"K_phi[0]: {self.K_phi[0].shape}")       # Should be [T, T]
-        print(f"G: {self.G.shape}")             # Should be [N, P]
-        print(f"gamma: {self.gamma.shape}")      # Should be [P, K]
-        print(f"logit_prev: {self.logit_prev.shape}")  # Should be [D]
+        """Compute the GP prior loss with time-dependent mean"""
         gp_loss = 0.0
         N, K, T = self.lambda_.shape
         K, D, T = self.phi.shape
 
         for k in range(K):
-            # Cholesky decomposition
-            L_lambda = torch.linalg.cholesky(self.K_lambda[k])  # T x T
-            L_phi = torch.linalg.cholesky(self.K_phi[k])       # T x T
+            L_lambda = torch.linalg.cholesky(self.K_lambda[k])
+            L_phi = torch.linalg.cholesky(self.K_phi[k])
 
-            # Lambda GP prior
-            lambda_k = self.lambda_[:, k, :]  # N x T
-            mean_lambda_k = (self.G @ self.gamma[:, k]).unsqueeze(1)  # N x 1
-            deviations_lambda = lambda_k - mean_lambda_k  # N x T
+            # Lambda GP prior (unchanged)
+            lambda_k = self.lambda_[:, k, :]
+            mean_lambda_k = (self.G @ self.gamma[:, k]).unsqueeze(1)
+            deviations_lambda = lambda_k - mean_lambda_k
 
-            # Process each individual separately to maintain correct dimensions
             for i in range(N):
-                dev_i = deviations_lambda[i:i+1].T  # T x 1
-                v_i = torch.cholesky_solve(dev_i, L_lambda)  # T x 1
+                dev_i = deviations_lambda[i:i+1].T
+                v_i = torch.cholesky_solve(dev_i, L_lambda)
                 gp_loss += 0.5 * torch.sum(v_i.T @ dev_i)
 
-            # Phi GP prior
+            # Phi GP prior with time-dependent mean
             phi_k = self.phi[k, :, :]  # D x T
-            mean_phi_k = self.logit_prev.unsqueeze(1)  # D x 1
-            deviations_phi = phi_k - mean_phi_k  # D x T
-
-            # Process each disease separately
             for d in range(D):
-                dev_d = deviations_phi[d:d+1].T  # T x 1
-                v_d = torch.cholesky_solve(dev_d, L_phi)  # T x 1
+                mean_phi_d = self.logit_prev_t[d, :]  # Use time-dependent mean
+                dev_d = (phi_k[d:d+1, :] - mean_phi_d).T  # T x 1
+                v_d = torch.cholesky_solve(dev_d, L_phi)
                 gp_loss += 0.5 * torch.sum(v_d.T @ dev_d)
 
         return gp_loss
@@ -529,7 +516,22 @@ def plot_best_matches(true_pi, pred_pi, n_samples=10, n_cols=2):
     plt.show()
 
 # Use after model fitting:
-"""
-pi_pred, theta_pred, phi_pred = model.forward()
-plot_best_matches(true_pi, pi_pred, n_samples=10, n_cols=2)
-"""
+# Example of preparing smoothed time-dependent prevalence
+def compute_smoothed_prevalence(Y, window_size=5):
+    """Compute smoothed time-dependent prevalence"""
+    N, D, T = Y.shape
+    prevalence_t = np.zeros((D, T))
+    
+    for d in range(D):
+        # Compute raw prevalence at each time point
+        raw_prev = Y[:, d, :].mean(axis=0)
+        
+        # Apply smoothing
+        from scipy.ndimage import gaussian_filter1d
+        prevalence_t[d, :] = gaussian_filter1d(raw_prev, sigma=window_size)
+    
+    return prevalence_t
+
+# When initializing the model:
+#prevalence_t = compute_smoothed_prevalence(Y, window_size=5)
+#model = AladynSurvivalModel(N, D, T, K, P, G, Y, prevalence_t)

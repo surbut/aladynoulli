@@ -1,5 +1,6 @@
 *.DS*
-
+pyScripts/__pycache__/*
+*cache*
 .Rproj.user
 *.pptx
 */saved_results
