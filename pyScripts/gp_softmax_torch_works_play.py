@@ -29,6 +29,18 @@ class AladynSurvivalModel(nn.Module):
         self.length_scales = nn.Parameter(torch.tensor(np.full(K, T / 3), dtype=torch.float32))
         self.log_amplitudes = nn.Parameter(torch.zeros(K, dtype=torch.float32))  # Start at amplitude = 1.0
 
+        """
+        # Initialize kernel parameters in log space with informative priors
+        self.length_scales = nn.Parameter(torch.log(torch.tensor(np.full(K, T/3), dtype=torch.float32)))
+        self.log_amplitudes = nn.Parameter(torch.zeros(K, dtype=torch.float32))
+        
+        # Prior hyperparameters
+        self.length_scale_prior_mean = np.log(T/3)  # Center around T/3
+        self.length_scale_prior_std = 0.5           # Relatively tight prior
+        self.amplitude_prior_mean = 0.0             # Log space, so exp(0) = 1
+        self.amplitude_prior_std = 0.5              # Allow reasonable variation
+        """
+
         # Initialize parameters
         self.initialize_params()
 
@@ -208,7 +220,7 @@ class AladynSurvivalModel(nn.Module):
 
         return gp_loss
 
-    def fit(self, event_times, num_epochs=100, learning_rate=1e-3, lambda_reg=1e-2):
+    def fit(self, event_times, num_epochs=1000,  learning_rate=1e-3, lambda_reg=1e-2, tol=1e-4, patience=5):
         """
         Fit model with detailed monitoring of parameters and stability
         """
@@ -228,6 +240,8 @@ class AladynSurvivalModel(nn.Module):
             'condition_number': []  # Track matrix conditioning
         }
         
+        best_loss = float('inf')
+        no_improve_count = 0
         for epoch in range(num_epochs):
             optimizer.zero_grad()
             
@@ -255,18 +269,38 @@ class AladynSurvivalModel(nn.Module):
             torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
             
             optimizer.step()
+            current_loss = loss.item()
             history['loss'].append(loss.item())
+
+            rel_change = abs(best_loss - current_loss) / (abs(best_loss) + 1e-10)
+
+            if current_loss < best_loss:
+                best_loss = current_loss
+                no_improve_count = 0
+            else:
+                no_improve_count += 1
             
             # 6. Print detailed monitoring every N epochs
             if epoch % 10 == 0:
                 print(f"\nEpoch {epoch}")
                 print(f"Loss: {loss.item():.4f}")
+                print(f"Relative change: {rel_change:.6f}")
+                print(f"No improvement count: {no_improve_count}")
                 print(f"Length scales: {self.length_scales.detach().numpy()}")
                 print(f"Amplitudes: {torch.exp(self.log_amplitudes).detach().numpy()}")
                 print(f"Max gradients - λ: {history['max_grad_lambda'][-1]:.4f}, "
                     f"φ: {history['max_grad_phi'][-1]:.4f}, "
                     f"γ: {history['max_grad_gamma'][-1]:.4f}")
                 print(f"Mean condition number: {history['condition_number'][-1]:.2f}")
+             # Stop if converged
+            if rel_change < tol:
+                print(f"\nConverged at epoch {epoch} - Relative change {rel_change:.6f} < {tol}")
+            break
+            
+        # Early stopping if no improvement
+            if no_improve_count >= patience:
+                print(f"\nStopping early - No improvement for {patience} epochs")
+            break
         
         return history
 

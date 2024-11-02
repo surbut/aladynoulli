@@ -1139,6 +1139,55 @@ for(prs in names(genetic_effects)[1:4]) {  # Show top 4 PRS effects
 }
 dev.off()
 
+
+
+# First, get all possible disease categories
+all_categories <- unique(c(
+    unique(transition_results$all_transitions$from),
+    unique(transition_results$all_transitions$to)
+))
+all_categories <- all_categories[all_categories != ""]  # Remove empty category if present
+
+# Modified plotting function
+plot_prs_heatmaps <- function(genetic_effects, top_n = 35 ) {
+    par(mfrow=c(2,2))
+    
+    for(prs in names(genetic_effects)[1:top_n]) {
+        effects_df <- genetic_effects[[prs]]
+        
+        if(nrow(effects_df) > 0) {
+            # Create complete matrix with all possible transitions
+            full_matrix <- matrix(0,  # Fill with zeros (white in heatmap)
+                                nrow = length(all_categories),
+                                ncol = length(all_categories),
+                                dimnames = list(all_categories, all_categories))
+            
+            # Fill in observed transitions
+            for(i in 1:nrow(effects_df)) {
+                if(effects_df$from[i] != "" && effects_df$to[i] != "") {
+                    full_matrix[effects_df$from[i], effects_df$to[i]] <- effects_df$prs_effect[i]
+                }
+            }
+            
+            # Create heatmap
+            heatmap(full_matrix,
+                   col = colorRampPalette(c("blue", "white", "red"))(100),
+                   main = paste("PRS Effects on Transitions -", prs),
+                   cexRow = 0.7,
+                   cexCol = 0.7,
+                   scale = "none")  # Don't scale the matrix
+        }
+    }
+}
+
+# Run the visualization
+pdf("prs_transition_heatmaps.pdf", width = 12, height = 12)
+plot_prs_heatmaps(genetic_effects)
+dev.off()
+
+
+
+
 # Create summary of most common transition patterns
 common_patterns <- sequences %>%
     filter(n_diseases >= 3) %>%  # Look at sequences of 3 or more diseases
@@ -1176,6 +1225,320 @@ p_time <- ggplot(time_between, aes(x = time_gaps)) +
 ggsave("transition_times.pdf", p_time, width = 8, height = 6)
 
 ```
+
+
+
+```{r}
+
+
+analyze_transitions <- function(sequences) {
+    transitions <- data.frame()
+    
+    for(i in 1:nrow(sequences)) {
+        seq <- unlist(sequences$sequence[i])
+        if(length(seq) >= 3) {
+            for(j in 1:(length(seq)-1)) {
+                transitions <- bind_rows(transitions,
+                    data.frame(
+                        from = seq[j],
+                        to = seq[j+1],
+                        eid = sequences$eid[i],
+                        position_in_sequence = j  # Add this to track actual position
+                    )
+                )
+            }
+        }
+    }
+    
+    # Count transitions
+    transition_counts <- transitions %>%
+        group_by(from, to) %>%
+        summarise(
+            weight = n(),
+            .groups = 'drop'
+        ) %>%
+        filter(weight >= 5)
+    
+    return(list(
+        all_transitions = transitions,
+        counts = transition_counts
+    ))
+}
+
+# Then modify analyze_genetic_effects
+analyze_genetic_effects <- function(transitions, prs_data) {
+    transitions_prs <- transitions %>%
+        inner_join(prs_data, by = c("eid" = "Identifier"))
+    
+    results <- list()
+    
+    for(prs_col in names(prs_data)[1:(ncol(prs_data)-1)]) {
+        transition_effects <- transitions_prs %>%
+            group_by(from, to) %>%
+            summarise(
+                n = n(),
+                # Now using actual position in sequence
+                prs_effect = cor(get(prs_col), position_in_sequence, method="spearman"),
+                .groups = 'drop'
+            ) %>%
+            filter(n >= 20)
+        
+        results[[prs_col]] <- transition_effects
+    }
+    
+    return(results)
+}
+
+
+
+
+
+
+```
+
+```{r}
+
+sequences <- get_disease_sequences(Y_sum_df)
+
+# Analyze transitions
+transition_results <- analyze_transitions(sequences[1:20000,])
+# Limit to first 1000 for speed
+
+genetic_effects <- analyze_genetic_effects(
+    transition_results$all_transitions,
+    prs_df
+)
+
+# First, get all possible disease categories
+all_categories <- unique(c(
+    unique(transition_results$all_transitions$from),
+    unique(transition_results$all_transitions$to)
+))
+all_categories <- all_categories[all_categories != ""]  # Remove empty category if present
+
+
+
+plot_prs_heatmaps <- function(genetic_effects, top_n = 36) {
+    # Set up plotting parameters for a 2x2 grid
+    par(mfrow=c(2,2))
+    
+    for(prs in names(genetic_effects)[1:top_n]) {
+        effects_df <- genetic_effects[[prs]]
+        
+        if(nrow(effects_df) > 0) {
+            # Create complete matrix with all possible transitions
+            full_matrix <- matrix(0,
+                                nrow = length(all_categories),
+                                ncol = length(all_categories),
+                                dimnames = list(all_categories, all_categories))
+            
+            # Fill in observed transitions
+            for(i in 1:nrow(effects_df)) {
+                if(effects_df$from[i] != "" && effects_df$to[i] != "") {
+                    full_matrix[effects_df$from[i], effects_df$to[i]] <- effects_df$prs_effect[i]
+                }
+            }
+            
+            # Get the range of correlation values for the legend
+            val_range <- range(full_matrix, na.rm = TRUE)
+            breaks <- seq(min(val_range), max(val_range), length.out = 101)
+            
+            # Create color palette
+            col_palette <- colorRampPalette(c("blue", "white", "red"))(100)
+            
+            # Set up the layout to include space for the legend
+            layout(matrix(c(1,2), ncol=2), widths=c(4,1))
+            
+            # Create heatmap
+            heatmap(full_matrix,
+                   col = col_palette,
+                   main = paste("PRS Effects on Transitions -", prs),
+                   cexRow = 0.7,
+                   cexCol = 0.7,
+                   scale = "none")
+            
+            # Add color key
+            par(mar=c(5,1,4,2))
+            plot(c(0,2), c(min(val_range), max(val_range)), 
+                 type = 'n', axes = FALSE, xlab = "", ylab = "")
+            title("Correlation\nStrength", line = 1)
+            for(i in 1:100) {
+                y1 <- breaks[i]
+                y2 <- breaks[i+1]
+                col <- col_palette[i]
+                rect(0, y1, 1, y2, col = col, border = NA)
+            }
+            axis(4, at = seq(min(val_range), max(val_range), length.out = 5),
+                 labels = round(seq(min(val_range), max(val_range), length.out = 5), 2))
+        }
+    }
+}
+
+# Run the visualization
+#pdf("prs_transition_heatmaps.pdf", width = 12, height = 12)
+plot_prs_heatmaps(genetic_effects)
+#dev.off()
+```
+
+
+```{r}
+
+
+# Improved function for analyzing genetic effects with better error handling
+analyze_genetic_effects <- function(transitions, prs_data) {
+    # Merge with PRS data
+    transitions_prs <- transitions %>%
+        inner_join(prs_data, by = c("eid" = "Identifier"))
+    
+    # List to store results for each PRS
+    results <- list()
+    
+    for(prs_col in names(prs_data)[1:(ncol(prs_data)-1)]) {
+        # Analyze each transition type with more statistics and error handling
+        transition_effects <- transitions_prs %>%
+            group_by(from, to) %>%
+            filter(n() >= 20) %>%  # Filter before calculating correlations
+            summarise(
+                n = n(),
+                # Safely calculate correlation and p-value
+                prs_effect = tryCatch({
+                    cor(get(prs_col), 1:n(), method="spearman")
+                }, error = function(e) NA),
+                p_value = tryCatch({
+                    cor.test(get(prs_col), 1:n(), method="spearman")$p.value
+                }, error = function(e) NA),
+                .groups = 'drop'
+            ) %>%
+            filter(!is.na(prs_effect) & !is.na(p_value)) %>%  # Remove NA results
+            mutate(
+                sig = p_value < 0.05,
+                adj_p = p.adjust(p_value, method="BH")
+            )
+        
+        results[[prs_col]] <- transition_effects
+    }
+    
+    return(results)
+}
+
+```
+
+  
+# Function to plot the genetic effects
+plot_genetic_effects <- function(genetic_effects, prs_name) {
+    # Get data for specific PRS
+    effects_df <- genetic_effects[[prs_name]]
+    
+    if(nrow(effects_df) > 0) {
+        # Filter for significant transitions and create matrix
+        sig_effects <- effects_df %>%
+            filter(adj_p < 0.05) %>%  # Use adjusted p-values
+            filter(from != "" & to != "") %>%  # Remove empty categories
+            mutate(
+                from = factor(from),
+                to = factor(to)
+            )
+        
+        if(nrow(sig_effects) > 0) {  # Check if we have any significant effects
+            # Create main plot
+            p <- ggplot(sig_effects, aes(x = from, y = to)) +
+                geom_tile(aes(fill = prs_effect)) +
+                geom_text(aes(label = sprintf("%.2f\n(n=%d)", prs_effect, n)), 
+                         size = 2.5) +
+                scale_fill_gradient2(
+                    low = "blue", 
+                    high = "red", 
+                    mid = "white",
+                    midpoint = 0,
+                    name = "Correlation"
+                ) +
+                theme_minimal() +
+                theme(
+                    axis.text.x = element_text(angle = 45, hjust = 1),
+                    plot.title = element_text(hjust = 0.5),
+                    panel.grid.major = element_blank(),
+                    panel.grid.minor = element_blank()
+                ) +
+                labs(
+                    title = paste("PRS Effects on Disease Transitions -", prs_name),
+                    x = "From Disease",
+                    y = "To Disease"
+                )
+            
+            return(p)
+        }
+    }
+    return(NULL)
+}
+
+# Let's print some diagnostic information first
+print_diagnostic_info <- function(transitions, prs_data) {
+    cat("Transition counts by category:\n")
+    print(table(transitions$from))
+    print(table(transitions$to))
+    
+    cat("\nNumber of unique individuals:", length(unique(transitions$eid)))
+    cat("\nNumber of total transitions:", nrow(transitions))
+    
+    # Check transition pairs with at least 20 observations
+    transition_counts <- transitions %>%
+        group_by(from, to) %>%
+        summarise(
+            n = n(),
+            .groups = 'drop'
+        ) %>%
+        filter(n >= 20)
+    
+    cat("\n\nTransition pairs with ≥20 observations:", nrow(transition_counts))
+    print(head(arrange(transition_counts, desc(n)), 10))
+}
+
+# Run the analysis with diagnostic information
+print_diagnostic_info(transition_results$all_transitions, prs_df)
+
+# Then run the genetic effects analysis
+genetic_effects <- analyze_genetic_effects(
+    transition_results$all_transitions,
+    prs_df
+)
+
+# Create visualizations
+pdf("genetic_effects_plots.pdf", width = 12, height = 8)
+for(prs in names(genetic_effects)) {
+    p <- plot_genetic_effects(genetic_effects, prs)
+    if(!is.null(p)) {
+        print(p)
+        
+        # Print summary statistics for this PRS
+        effects_df <- genetic_effects[[prs]]
+        cat("\nSummary for", prs, ":\n")
+        cat("Total transitions analyzed:", nrow(effects_df), "\n")
+        cat("Significant transitions (p < 0.05):", sum(effects_df$p_value < 0.05), "\n")
+        cat("Significant transitions (adj_p < 0.05):", sum(effects_df$adj_p < 0.05), "\n")
+        cat("Range of effects:", round(range(effects_df$prs_effect, na.rm=TRUE), 3), "\n\n")
+    }
+}
+dev.off()
+```
+
+This improved version:
+
+1. Added error handling for correlation calculations
+2. Filters for minimum sample size before attempting correlations
+3. Removes empty categories and NA results
+4. Adds diagnostic information to help understand the data structure
+5. Includes more informative console output
+
+The main changes are:
+- Pre-filtering for sufficient sample size
+- Using tryCatch for correlation calculations
+- Better handling of empty categories
+- Added diagnostic information printing
+- More robust plotting function
+
+Try running this and let me know if you get any errors. If you do, we can look at the diagnostic information to understand what's happening in your data and adjust accordingly.
+```
+
 
 ```{r}
 
@@ -1824,3 +2187,120 @@ head(data.frame(
 
 # Save for later use
 saveRDS(disease_names, "~/Dropbox (Personal)/disease_names.rds")
+
+
+```
+
+
+```{r}
+library(igraph)
+library(ggplot2)
+library(dplyr)
+
+# Function to create transition network and PRS association plot
+analyze_disease_patterns <- function(sequences, prs_data, min_transitions = 20) {
+    # Create transition network
+    transitions <- data.frame()
+    for(i in 1:nrow(sequences)) {
+        seq <- unlist(sequences$sequence[i])
+        if(length(seq) >= 2) {  # Changed to 2 to see more transitions
+            for(j in 1:(length(seq)-1)) {
+                transitions <- bind_rows(transitions,
+                    data.frame(
+                        from = seq[j],
+                        to = seq[j+1],
+                        eid = sequences$eid[i]
+                    )
+                )
+            }
+        }
+    }
+    
+    # Count transitions and filter for common ones
+    transition_counts <- transitions %>%
+        group_by(from, to) %>%
+        summarise(
+            weight = n(),
+            .groups = 'drop'
+        ) %>%
+        filter(weight >= min_transitions)
+    
+    # Create network
+    g <- graph_from_data_frame(
+        transition_counts,
+        directed = TRUE
+    )
+    
+    # Calculate node statistics
+    V(g)$size <- degree(g, mode="total") * 2
+    V(g)$color <- ifelse(V(g)$name %in% c("circulatory system", "cardiovascular", "heart disease"), 
+                        "red", "lightblue")
+    E(g)$width <- log(E(g)$weight)
+    
+    # Plot network
+    pdf("disease_transitions.pdf", width = 12, height = 8)
+    plot(g,
+         layout = layout_with_fr,
+         vertex.label.cex = 0.8,
+         vertex.label.color = "black",
+         edge.arrow.size = 0.5,
+         main = "Disease Transition Network")
+    dev.off()
+    
+    # Analyze PRS associations with disease categories
+    # Merge sequence data with PRS
+    disease_prs <- data.frame()
+    for(i in 1:nrow(sequences)) {
+        seq <- unlist(sequences$sequence[i])
+        disease_prs <- bind_rows(disease_prs,
+            data.frame(
+                eid = sequences$eid[i],
+                disease = seq
+            )
+        )
+    }
+    
+    disease_prs <- disease_prs %>%
+        inner_join(prs_data, by = c("eid" = "Identifier"))
+    
+    # Calculate average PRS scores for each disease category
+    prs_summary <- disease_prs %>%
+        group_by(disease) %>%
+        summarise(
+            n = n(),
+            mean_cad_prs = mean(CAD),
+            sd_cad_prs = sd(CAD),
+            .groups = 'drop'
+        ) %>%
+        filter(n >= min_transitions) %>%
+        arrange(desc(mean_cad_prs))
+    
+    # Create PRS association plot
+    p <- ggplot(prs_summary, aes(x = reorder(disease, mean_cad_prs), y = mean_cad_prs)) +
+        geom_bar(stat = "identity", fill = "lightblue") +
+        geom_errorbar(aes(ymin = mean_cad_prs - sd_cad_prs, 
+                         ymax = mean_cad_prs + sd_cad_prs), 
+                     width = 0.2) +
+        coord_flip() +
+        theme_minimal() +
+        labs(
+            title = "Average CAD PRS by Disease Category",
+            x = "Disease Category",
+            y = "Mean CAD PRS Score"
+        ) +
+        theme(
+            axis.text.y = element_text(size = 8)
+        )
+    
+    ggsave("prs_by_disease.pdf", p, width = 10, height = 8)
+    
+    return(list(
+        network = g,
+        prs_summary = prs_summary
+    ))
+}
+
+# Run the analysis
+results <- analyze_disease_patterns(sequences, prs_df)
+
+```
