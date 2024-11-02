@@ -6,3 +6,4 @@ pyScripts/__pycache__/*
 */saved_results
 data/*
 saved_results/*
+.DS*

@@ -1,0 +1,1826 @@
+---
+title: "data"
+output: html_document
+date: "2024-10-31"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+# Load required libraries
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+library(viridis)
+
+
+Y=readRDS("~/Dropbox (Personal)/icd10phe_lab.rds")
+
+Y_sum_df=merge(Y_sum_df,ATM::disease_info_phecode_icd10[,c("phecode","phenotype","exclude_name")],by.x="names",by.y="phecode")
+Y_sum_df$names=rownames(Y_sum)
+Y_sum_df=data.frame(Y_sum)
+
+
+# Function to plot disease events for a given set of individuals
+plot_disease_events <- function(Y, individuals = 1:10, diseases = NULL, 
+                              time_range = NULL, title = "Disease Events") {
+  # Get dimensions
+  N <- dim(Y)[1]
+  D <- dim(Y)[2]
+  T <- dim(Y)[3]
+  # Default ranges if not specified
+  if (is.null(diseases)) diseases <- 1:D
+  if (is.null(time_range)) time_range <- 1:T
+  
+  # Convert tensor slice to long format
+  data_long <- expand.grid(
+    Individual = individuals,
+    Disease = paste("Disease", diseases),
+    Time = time_range
+  ) %>%
+    mutate(Event = as.vector(Y[individuals, diseases, time_range]))
+  
+  # Create the plot with improved visibility
+  p <- ggplot(data_long, aes(x = Time, y = interaction(Disease, Individual))) +
+    # Increase tile size and make events more prominent
+    geom_tile(aes(fill = factor(Event)), width = 0.8, height = 0.8) +
+    # Use a more contrasting color scheme
+    scale_fill_manual(values = c("0" = "white", "1" = "darkred"),
+                     name = "Event",
+                     labels = c("No event", "Disease onset")) +
+    theme_classic() +
+    labs(title = title,
+         x = "Time",
+         y = "") +
+    # Improve text and grid visibility
+    theme(
+      axis.text.y = element_text(size = 7),  # Smaller text for y-axis
+      axis.text.x = element_text(size = 10),
+      plot.title = element_text(hjust = 0.5, size = 14),
+      panel.grid = element_blank(),  # Remove grid lines
+      panel.background = element_rect(fill = "white"),  # Light grey background
+      legend.position = "right",
+      plot.margin = margin(10, 10, 10, 10)
+    )
+  
+  
+plot_summed_events <- function(Y, title = "Total Disease Events Over Time") {
+  # Calculate sum across individuals
+  Y_sum <- apply(Y, c(2,3), sum)
+  
+  # Convert to long format for ggplot
+  data_long <- reshape2::melt(Y_sum) %>%
+    dplyr::rename(
+      Disease = Var1,
+      Time = Var2,
+      Count = value
+    ) %>%
+    dplyr::mutate(Disease = factor(Disease, levels = nrow(Y_sum):1))  # Reverse disease order for plotting
+  
+  # Create heatmap
+  p <- ggplot(data_long, aes(x = Time, y = Disease)) +
+    geom_tile(aes(fill = Count)) +
+    scale_fill_viridis_c(option = "magma", direction = -1) +  # Use magma color palette
+    theme_minimal() +
+    labs(
+      title = title,
+      x = "Time",
+      y = "Disease",
+      fill = "Number of\nevents"
+    ) +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 14),
+      axis.text = element_text(size = 10),
+      panel.grid = element_blank(),
+      legend.position = "right",
+      plot.margin = margin(10, 10, 10, 10)
+    )
+  
+  return(p)
+}
+
+#Example usage:
+Y_sum <- apply(Y, c(2,3), sum)
+p <- plot_summed_events(Y)
+print(p)
+ggsave("disease_events_sum.pdf", p, width = 12, height = 6, dpi = 300)
+
+  
+  return(p)
+}
+
+# Function to plot disease patterns over time
+plot_disease_patterns <- function(Y, type = "onset") {
+  # Get dimensions
+  N <- dim(Y)[1]
+  D <- dim(Y)[2]
+  T <- dim(Y)[3]
+  
+  if (type == "onset") {
+    # Calculate proportion of onsets at each time for each disease
+    onset_props <- sapply(1:D, function(d) {
+      colMeans(Y[,d,])
+    })
+    
+    data_long <- melt(onset_props) %>%
+      rename(Time = Var1, 
+             Disease = Var2, 
+             Proportion = value) %>%
+      mutate(Disease = paste("Disease", Disease))
+    
+    p <- ggplot(data_long, aes(x = Time, y = Disease, fill = Proportion)) +
+      geom_tile() +
+      scale_fill_viridis(name = "Proportion\nof onsets") +
+      theme_minimal() +
+      labs(title = "Disease Onset Patterns",
+           x = "Time",
+           y = "Disease") +
+      theme(panel.grid = element_blank())
+    
+  } else if (type == "cumulative") {
+    # Calculate cumulative incidence
+    cum_props <- sapply(1:D, function(d) {
+      colMeans(t(apply(Y[,d,], 1, cumsum)))
+    })
+    
+    data_long <- melt(cum_props) %>%
+      rename(Time = Var1, 
+             Disease = Var2, 
+             Proportion = value) %>%
+      mutate(Disease = paste("Disease", Disease))
+    
+    p <- ggplot(data_long, aes(x = Time, y = Disease, fill = Proportion)) +
+      geom_tile() +
+      scale_fill_viridis(name = "Cumulative\nincidence") +
+      theme_minimal() +
+      labs(title = "Cumulative Disease Patterns",
+           x = "Time",
+           y = "Disease") +
+      theme(panel.grid = element_blank())
+  }
+  
+  return(p)
+}
+
+# Function to plot disease co-occurrence within a time window
+plot_disease_cooccurrence <- function(Y, window = 5) {
+  N <- dim(Y)[1]
+  D <- dim(Y)[2]
+  
+  # Calculate time to first event for each individual-disease pair
+  first_events <- apply(Y, c(1,2), function(x) {
+    event_times <- which(x == 1)
+    if(length(event_times) > 0) min(event_times) else NA
+  })
+  
+  # Calculate co-occurrence matrix
+  cooc_matrix <- matrix(0, D, D)
+  for(i in 1:N) {
+    times <- first_events[i,]
+    for(d1 in 1:D) {
+      for(d2 in 1:D) {
+        if(!is.na(times[d1]) && !is.na(times[d2])) {
+          cooc_matrix[d1,d2] <- cooc_matrix[d1,d2] + 
+            (abs(times[d1] - times[d2]) <= window)
+        }
+      }
+    }
+  }
+  cooc_matrix <- cooc_matrix/N
+  
+  # Convert to long format for plotting
+  data_long <- melt(cooc_matrix) %>%
+    mutate(Var1 = paste("Disease", Var1),
+           Var2 = paste("Disease", Var2))
+  
+  # Plot
+  p <- ggplot(data_long, aes(x = Var1, y = Var2, fill = value)) +
+    geom_tile() +
+    scale_fill_viridis(name = paste0("Co-occurrence\nfrequency\n(within ", 
+                                    window, " time units)")) +
+    theme_minimal() +
+    labs(title = "Disease Co-occurrence Patterns",
+         x = "Disease 1",
+         y = "Disease 2") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          panel.grid = element_blank())
+  
+  return(p)
+}
+
+# Create a combined visualization
+plot_disease_analysis <- function(Y, num_individuals = 10) {
+  # Create all plots
+  p1 <- plot_disease_events(Y, individuals = 1:num_individuals) +
+    ggtitle("A) Individual Disease Events")
+  
+  p2 <- plot_disease_patterns(Y, type = "onset") +
+    ggtitle("B) Disease Onset Patterns")
+  
+  p3 <- plot_disease_patterns(Y, type = "cumulative") +
+    ggtitle("C) Cumulative Disease Patterns")
+  
+  p4 <- plot_disease_cooccurrence(Y) +
+    ggtitle("D) Disease Co-occurrence")
+  
+  # Combine plots using cowplot
+  library(cowplot)
+  combined <- plot_grid(p1, p2, p3, p4, ncol = 2)
+  
+  return(combined)
+}
+
+# Example usage:
+# Assuming Y is your N x D x T tensor of binary events
+
+# For individual plots:
+p1 <- plot_disease_events(Y)
+p2 <- plot_disease_patterns(Y, type = "onset")
+p3 <- plot_disease_patterns(Y, type = "cumulative")
+p4 <- plot_disease_cooccurrence(Y)
+
+# For combined visualization:
+# p_all <- plot_disease_analysis(Y)
+
+# To save:
+# ggsave("disease_analysis.pdf", p_all, width = 15, height = 12)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+# Load required libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(viridis)
+
+# Function to find and plot most prevalent diseases
+plot_top_diseases <- function(Y_sum_df, n_diseases = 5) {
+  # Calculate total cases for each disease
+  disease_totals <- Y_sum_df %>%
+    select(-Group, -Pheno, -phecode) %>%  # Remove non-numeric columns
+    mutate(total = rowSums(.)) %>%
+    bind_cols(Y_sum_df %>% select(Pheno, Group, phecode)) %>%
+    arrange(desc(total))
+  
+  # Get top n diseases
+  top_diseases <- disease_totals %>%
+    head(n_diseases)
+  
+  # Reshape data for plotting
+  plot_data <- top_diseases %>%
+    select(-total) %>%
+    pivot_longer(
+      cols = matches("^\\d+$"),  # Columns that are just numbers
+      names_to = "Age",
+      values_to = "Count"
+    ) %>%
+    mutate(Age = as.numeric(Age))
+  
+  # Create plot
+  p <- ggplot(plot_data, aes(x = Age, y = Count, fill = Pheno)) +
+    geom_area(alpha = 0.6, position = "identity") +
+    scale_fill_viridis(discrete = TRUE) +
+    theme_minimal() +
+    labs(
+      title = paste("Age Distribution of Top", n_diseases, "Most Prevalent Diseases"),
+      x = "Age of Onset",
+      y = "Number of Cases",
+      fill = "Disease"
+    ) +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 14),
+      legend.position = "bottom",
+      legend.box = "horizontal",
+      panel.grid.minor = element_blank(),
+      axis.text = element_text(size = 10),
+      legend.text = element_text(size = 8)
+    )
+  
+  return(p)
+}
+
+# Function to plot diseases by group
+plot_disease_groups <- function(Y_sum_df, selected_groups = NULL, n_per_group = 3) {
+  # If no groups specified, use all groups
+  if(is.null(selected_groups)) {
+    selected_groups <- unique(Y_sum_df$Group)
+  }
+  
+  # Calculate totals and get top diseases per group
+  top_by_group <- Y_sum_df %>%
+    filter(Group %in% selected_groups) %>%
+    group_by(Group) %>%
+    mutate(total = rowSums(select(., matches("^\\d+$")))) %>%
+    arrange(desc(total)) %>%
+    slice_head(n = n_per_group) %>%
+    ungroup()
+  
+  # Reshape data for plotting
+  plot_data <- top_by_group %>%
+    select(-total) %>%
+    pivot_longer(
+      cols = matches("^\\d+$"),
+      names_to = "Age",
+      values_to = "Count"
+    ) %>%
+    mutate(
+      Age = as.numeric(Age),
+      Group = factor(Group),
+      Pheno = factor(Pheno)
+    )
+  
+  # Create faceted plot
+  p <- ggplot(plot_data, aes(x = Age, y = Count, fill = Pheno)) +
+    geom_area(alpha = 0.6) +
+    facet_wrap(~Group, scales = "free_y") +
+    scale_fill_viridis(discrete = TRUE) +
+    theme_minimal() +
+    labs(
+      title = "Disease Onset Patterns by Group",
+      x = "Age of Onset",
+      y = "Number of Cases",
+      fill = "Disease"
+    ) +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 14),
+      legend.position = "bottom",
+      strip.text = element_text(size = 10),
+      panel.grid.minor = element_blank(),
+      axis.text = element_text(size = 8),
+      legend.text = element_text(size = 7)
+    )
+  
+  return(p)
+}
+
+# Example usage:
+# 1. Plot top 5 most prevalent diseases overall
+p1 <- plot_top_diseases(Y_sum_df, n_diseases = 5)
+
+# 2. Plot top diseases by selected groups
+selected_groups <- c("neoplasms", "infectious diseases", "cardiovascular")
+p2 <- plot_disease_groups(Y_sum_df, 
+                         selected_groups = selected_groups,
+                         n_per_group = 3)
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r}
+# Function to plot diseases by group with proper data handling
+
+plot_disease_groups <- function(Y_sum_df, selected_groups = NULL, n_per_group = 3) {
+  # Ensure numeric columns are properly converted
+  numeric_cols <- grep("^\\d+$", names(Y_sum_df), value = TRUE)
+  
+  # Calculate totals and get top diseases per group
+  top_by_group <- Y_sum_df %>%
+    # Ensure numeric columns are numeric
+    mutate(across(all_of(numeric_cols), as.numeric)) %>%
+    # Filter for selected groups
+    filter(Group %in% selected_groups) %>%
+    # Calculate totals
+    group_by(Group) %>%
+    mutate(total = rowSums(pick(all_of(numeric_cols)))) %>%
+    arrange(desc(total)) %>%
+    slice_head(n = n_per_group) %>%
+    ungroup()
+  
+  # Reshape data for plotting
+  plot_data <- top_by_group %>%
+    select(-total) %>%
+    pivot_longer(
+      cols = all_of(numeric_cols),
+      names_to = "Age",
+      values_to = "Count"
+    ) %>%
+    mutate(
+      Age = as.numeric(Age),
+      Group = factor(Group),
+      Pheno = factor(Pheno)
+    )
+  
+  # Create faceted plot
+  p <- ggplot(plot_data, aes(x = Age, y = Count, color = Pheno)) +
+    geom_line(linewidth = 1.2) +
+    facet_wrap(~Group, scales = "free_y", ncol = 1) +
+    scale_color_viridis_d() +
+    theme_minimal() +
+    labs(
+      title = "Disease Onset Patterns by Group",
+      x = "Age of Onset",
+      y = "Number of Cases",
+      color = "Disease"
+    ) +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 14),
+      legend.position = "right",
+      strip.text = element_text(size = 12, face = "bold"),
+      panel.grid.minor = element_blank(),
+      axis.text = element_text(size = 10),
+      legend.text = element_text(size = 8)
+    )
+  
+  return(p)
+}
+
+# Example usage:
+selected_groups <- c("neoplasms", "digestive", "circulatory system")
+p2 <- plot_disease_groups(Y_sum_df, 
+                         selected_groups = selected_groups,
+                         n_per_group = 3)
+
+# To save the plot:
+# ggsave("disease_groups.pdf", p2, width = 12, height = 10)
+```
+
+
+```{r}
+# Load required libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+library(viridis)
+library(patchwork)
+
+# Function to create density plot for top diseases within a group
+create_group_density_plot <- function(data, group_name, n_top = 4) {
+  # Get top n diseases in this group
+  top_diseases <- data %>%
+    filter(exclude_name == group_name) %>%
+    group_by(phenotype) %>%
+    summarise(
+      n = n(),
+      mean_age = mean(age_diag, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    arrange(desc(n)) %>%
+    slice_head(n = n_top)
+  
+  # Filter data for just these diseases
+  plot_data <- data %>%
+    filter(exclude_name == group_name,
+           phenotype %in% top_diseases$phenotype)
+  
+  # Create plot
+  p <- ggplot(plot_data, aes(x = age_diag, fill = phenotype)) +
+    geom_density(alpha = 0.5) +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(size = 10, face = "bold"),
+      axis.title = element_text(size = 10),
+      axis.text = element_text(size = 8),
+      legend.position = "right",
+      legend.text = element_text(size = 8),
+      plot.title = element_text(size = 12, face = "bold", hjust = 0.5)
+    ) +
+    scale_x_continuous(
+      name = "Age of onset",
+      limits = c(40, 80),
+      breaks = seq(40, 80, by = 10)
+    ) +
+    scale_fill_viridis_d(
+      option = "D",
+      name = "Disease",
+      labels = function(x) {
+        counts <- top_diseases %>%
+          filter(phenotype %in% x) %>%
+          arrange(match(phenotype, x))
+        paste0(x, "\n(n=", counts$n, ")")
+      }
+    ) +
+    labs(
+      title = paste("Top", n_top, "Diseases in", group_name),
+      y = "Density"
+    )
+  
+  # Add text with disease counts
+  counts_text <- top_diseases %>%
+    mutate(
+      desc = paste0(phenotype, ": n=", n, 
+                   " (mean age=", round(mean_age, 1), ")")
+    ) %>%
+    pull(desc) %>%
+    paste(collapse = "\n")
+  
+  return(p)
+}
+
+# Get unique disease groups
+groups <- unique(Y_sum_df$exclude_name)
+groups=c("circulatory system","respiratory","digestive","neoplasms","neurological","congenital anomalies")
+
+# Create plots for each group
+plots <- list()
+summaries <- list()
+
+for(group in groups) {
+  # Get summary for this group
+  group_summary <- Y_sum_df %>%
+    filter(exclude_name == group) %>%
+    group_by(phenotype) %>%
+    summarise(
+      n = n(),
+      mean_age = mean(age_diag, na.rm = TRUE),
+      median_age = median(age_diag, na.rm = TRUE),
+      sd_age = sd(age_diag, na.rm = TRUE)
+    ) %>%
+    arrange(desc(n)) %>%
+    slice_head(n = 4)
+  
+  summaries[[group]] <- group_summary
+  plots[[group]] <- create_group_density_plot(Y_sum_df, group)
+}
+
+# Combine all summaries into one dataframe
+all_summaries <- bind_rows(summaries, .id = "disease_group")
+
+# Save plots
+for(i in seq_along(groups)) {
+  ggsave(
+    paste0("top_diseases_", groups[i], ".pdf"),
+    plots[[i]],
+    width = 6,
+    height = 4,
+    dpi = 300
+  )
+}
+# Combined plot using patchwork
+n_groups <- length(groups)
+n_cols <- min(2, n_groups)
+n_rows <- ceiling(n_groups / n_cols)
+
+combined_plot <- wrap_plots(plots, ncol = n_cols)
+
+ggsave(
+  "all_groups_top_diseases.pdf",
+  combined_plot,
+  width = 10 * n_cols,
+  height = 6 * n_rows,
+  dpi = 300
+)
+
+# Save summary statistics
+#write.csv(all_summaries, "top_diseases_summary.csv", row.names = FALSE)
+
+# Print text summary
+cat("\nTop 4 diseases by group:\n\n")
+for(group in groups) {
+  cat("\n", group, ":\n", sep="")
+  group_data <- summaries[[group]]
+  for(i in 1:nrow(group_data)) {
+    cat(sprintf("%s: n=%d (mean age=%.1f)\n",
+                group_data$phenotype[i],
+                group_data$n[i],
+                group_data$mean_age[i]))
+  }
+}
+```
+
+
+```{r}
+
+# Define mapping between PRS columns and disease names
+prs_mapping <- list(
+   
+    "AMD" = "Macular degeneration (senile) of retina NOS",
+    "AD" = "Alzheimer's disease",
+    "AST" = "Asthma",
+    "AF" = "Atrial fibrillation",
+    "BD" = "Bipolar",
+    "BMI" = "Overweight, obesity and other hyperalimentation",
+    "CRC" = "Colorectal cancer",
+    "BC" = "Malignant neoplasm of female breast",
+    
+    "CED" = "Celiac disease",  
+    "CAD" = "Coronary atherosclerosis",
+    
+    "EOC" = "Malignant neoplasm of ovary",
+    "T1D" = "Type 1 diabetes",
+    "T2D" = "Type 2 diabetes",
+    "UC" = "Ulcerative colitis",
+    "VTE" = "Other venous embolism and thrombosis",
+    "RA" = "Rheumatoid arthritis",
+    "SLE" = "Systemic lupus erythematosus",
+    "SCZ" = "Schizophrenia",
+    "MS" =  "Multiple sclerosis",
+    "PD" = "Parkinson's disease"
+)
+
+# Function to standardize disease names
+standardize_name <- function(x) {
+    x <- tolower(x)
+    x <- gsub("[[:punct:]]", "", x)
+    x <- gsub("\\s+", "", x)
+    return(x)
+}
+
+std_mapping <- lapply(prs_mapping, standardize_name)
+Y_sum_df$std_phenotype <- standardize_name(Y_sum_df$phenotype)
+
+# Load required libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(pheatmap)
+library(viridis)
+library(broom)
+
+# Read the data
+Y_sum_df <- read.csv("Y_sum_df.csv")
+prs_df <- read.table("prs_df", header=TRUE)
+
+# Define mapping between PRS columns and disease names
+prs_mapping <- list(
+    "AAM" = "age at menopause",
+    "AMD" = "age-related macular degeneration",
+    "AD" = "alzheimer's disease",
+    "AST" = "asthma",
+    "AF" = "atrial fibrillation",
+    "BD" = "bipolar disorder",
+    "BMI" = "body mass index",
+    "CRC" = "bowel cancer",
+    "BC" = "breast cancer",
+    "CVD" = "cardiovascular disease",
+    "CED" = "coeliac disease",
+    "CAD" = "coronary artery disease",
+    "CD" = "crohn's disease",
+    "EOC" = "epithelial ovarian cancer",
+    "T1D" = "type 1 diabetes",
+    "T2D" = "type 2 diabetes",
+    "UC" = "ulcerative colitis",
+    "VTE" = "venous thromboembolic disease",
+    "RA" = "rheumatoid arthritis",
+    "SLE" = "systemic lupus erythematosus",
+    "SCZ" = "schizophrenia",
+    "MS" = "multiple sclerosis",
+    "PD" = "parkinson's disease"
+)
+
+# Function to standardize disease names
+standardize_name <- function(x) {
+    x <- tolower(x)
+    x <- gsub("[[:punct:]]", "", x)
+    x <- gsub("\\s+", "", x)
+    return(x)
+}
+
+# Create standardized versions of both mapping and phenotype names
+std_mapping <- lapply(prs_mapping, standardize_name)
+Y_sum_df$std_phenotype <- standardize_name(Y_sum_df$phenotype)
+
+# Function to analyze one matched pair
+analyze_matched_pair <- function(pheno, prs_col, Y_data, prs_data) {
+    # Get phenotype data
+    pheno_data <- Y_data %>%
+        filter(std_phenotype == standardize_name(pheno))
+    
+    if(nrow(pheno_data) < 20) return(NULL)
+    
+    # Merge with PRS data
+    merged_data <- pheno_data %>%
+        inner_join(prs_data %>%
+                    select(!!sym(prs_col), `Identifier`) %>%
+                    rename(eid = `Identifier`),
+                  by = "eid")
+    
+    # Run regression
+    model <- lm(age_diag ~ get(prs_col), data = merged_data)
+    stats <- tidy(model) %>%
+        filter(term != "(Intercept)")
+    
+    result <- stats %>%
+        mutate(
+            n = nrow(merged_data),
+            phenotype = unique(pheno_data$phenotype)[1],
+            prs = prs_col,
+            mean_age = mean(merged_data$age_diag),
+            sd_age = sd(merged_data$age_diag)
+        )
+    
+    # Create violin plot split by PRS quintiles
+    merged_data$prs_quintile <- cut(merged_data[[prs_col]], 
+                                   breaks = quantile(merged_data[[prs_col]], probs = seq(0, 1, 0.2)),
+                                   labels = c("Q1", "Q2", "Q3", "Q4", "Q5"),
+                                   include.lowest = TRUE)
+    
+    p1 <- ggplot(merged_data, aes(x = get(prs_col), y = age_diag)) +
+        geom_point(alpha = 0.3) +
+        geom_smooth(method = "lm", color = "red") +
+        theme_minimal() +
+        labs(
+            title = paste("Age of Onset vs PRS for", unique(pheno_data$phenotype)),
+            subtitle = sprintf("n = %d\nEffect = %.2f years per SD (p = %.3g)",
+                             result$n, result$estimate, result$p.value),
+            x = "PRS Score (standardized)",
+            y = "Age of Onset (years)"
+        )
+    
+    p2 <- ggplot(merged_data, aes(x = prs_quintile, y = age_diag)) +
+        geom_violin(fill = "lightblue", alpha = 0.5) +
+        geom_boxplot(width = 0.2, fill = "white", alpha = 0.7) +
+        theme_minimal() +
+        labs(
+            title = "Age of Onset by PRS Quintile",
+            x = "PRS Quintile",
+            y = "Age of Onset (years)"
+        )
+    
+    return(list(stats = result, scatter = p1, violin = p2, data = merged_data))
+}
+
+# Analyze all matched pairs
+results_list <- list()
+plot_list <- list()
+
+for(prs_col in names(prs_mapping)) {
+    result <- analyze_matched_pair(
+        prs_mapping[[prs_col]],
+        prs_col,
+        Y_sum_df,
+        prs_df
+    )
+    
+    if(!is.null(result)) {
+        results_list[[prs_col]] <- result$stats
+        plot_list[[prs_col]] <- list(scatter = result$scatter, 
+                                    violin = result$violin)
+    }
+}
+
+# Combine results
+results_df <- bind_rows(results_list) %>%
+    arrange(p.value)
+
+# Save results
+write.csv(results_df, "matched_prs_onset_results.csv", row.names = FALSE)
+
+# Save plots for significant associations
+for(prs in names(plot_list)[results_df$p.value < 0.05]) {
+    # Save scatter plot
+    ggsave(
+        paste0("prs_scatter_", tolower(prs), ".pdf"),
+        plot_list[[prs]]$scatter,
+        width = 8,
+        height = 6
+    )
+    
+    # Save violin plot
+    ggsave(
+        paste0("prs_violin_", tolower(prs), ".pdf"),
+        plot_list[[prs]]$violin,
+        width = 8,
+        height = 6
+    )
+}
+
+# Create summary plot of effect sizes
+p_effects <- ggplot(results_df, 
+                   aes(x = reorder(phenotype, estimate), 
+                       y = estimate)) +
+    geom_point() +
+    geom_errorbar(aes(ymin = estimate - 1.96*std.error,
+                      ymax = estimate + 1.96*std.error)) +
+    coord_flip() +
+    theme_minimal() +
+    labs(
+        title = "PRS Effect Sizes on Age of Onset",
+        subtitle = "Error bars show 95% confidence intervals",
+        x = "Disease",
+        y = "Effect Size (years per SD of PRS)"
+    )
+
+ggsave("prs_effects_summary.pdf", p_effects, width = 10, height = 8)
+
+# Create heatmap for visualization
+results_mat <- matrix(NA, 
+                     nrow = 1, 
+                     ncol = length(results_df$phenotype),
+                     dimnames = list("Effect", results_df$phenotype))
+results_mat[1,] <- results_df$estimate
+
+# Add stars for significance
+stars_mat <- matrix("", 
+                   nrow = 1, 
+                   ncol = length(results_df$phenotype),
+                   dimnames = list("", results_df$phenotype))
+stars_mat[1, results_df$p.value < 0.05] <- "*"
+
+pdf("prs_effects_heatmap.pdf", width = 12, height = 4)
+pheatmap(results_mat,
+         display_numbers = stars_mat,
+         cluster_cols = TRUE,
+         cluster_rows = FALSE,
+         color = colorRampPalette(c("blue", "white", "red"))(100),
+         main = "PRS Effects on Age of Onset (years per SD)")
+dev.off()
+
+# Print summary
+cat("\nResults summary (sorted by significance):\n")
+print(results_df %>%
+    select(phenotype, estimate, p.value, n) %>%
+    mutate(
+        estimate = round(estimate, 2),
+        p.value = format.pval(p.value, digits = 2)
+    ))
+
+###
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(quantreg)
+library(viridis)
+library(patchwork)
+
+
+# Function to analyze early vs late onset effects
+analyze_onset_patterns <- function(pheno, prs_col, Y_data, prs_data) {
+    # Standardize names and merge data
+    std_pheno <- tolower(gsub("[[:punct:]]|\\s+", "", pheno))
+    pheno_data <- Y_data %>%
+        mutate(std_phenotype = tolower(gsub("[[:punct:]]|\\s+", "", phenotype))) %>%
+        filter(std_phenotype == std_pheno)
+    
+    if(nrow(pheno_data) < 100) return(NULL)  # Need enough cases for quantile analysis
+    
+    # Merge with PRS data
+    merged_data <- pheno_data %>%
+        inner_join(prs_data %>%
+                    select(!!sym(prs_col), `Identifier`) %>%
+                    rename(eid = `Identifier`),
+                  by = "eid")
+    
+    # Define early onset threshold (25th percentile of age)
+    early_threshold <- quantile(merged_data$age_diag, 0.25)
+    late_threshold <- quantile(merged_data$age_diag, 0.75)
+    
+    # Add onset category
+    merged_data <- merged_data %>%
+        mutate(
+            onset_cat = case_when(
+                age_diag <= early_threshold ~ "Early",
+                age_diag >= late_threshold ~ "Late",
+                TRUE ~ "Middle"
+            )
+        )
+    
+    # Fit quantile regression for different percentiles
+    taus <- c(0.1, 0.25, 0.5, 0.75, 0.9)
+    qr_fits <- lapply(taus, function(tau) {
+        fit <- rq(age_diag ~ get(prs_col), tau = tau, data = merged_data)
+        coef(summary(fit))[2,]
+    })
+    qr_results <- do.call(rbind, qr_fits)
+    rownames(qr_results) <- paste0("Q", taus*100)
+    
+    # Regular regression for comparison
+    lm_fit <- lm(age_diag ~ get(prs_col), data = merged_data)
+    
+    # Create visualizations
+    
+    # 1. Scatter plot with separate regression lines for early/late
+    p1 <- ggplot(merged_data, aes(x = get(prs_col), y = age_diag, color = onset_cat)) +
+        geom_point(alpha = 0.3) +
+        geom_smooth(method = "lm", se = FALSE) +
+        scale_color_viridis_d() +
+        theme_minimal() +
+        labs(
+            title = paste("Age of Onset vs", prs_col, "for", pheno),
+            subtitle = paste("n =", nrow(merged_data)),
+            x = "PRS Score (standardized)",
+            y = "Age of Onset",
+            color = "Onset Category"
+        )
+    
+    # 2. Quantile regression effects plot
+    qr_df <- data.frame(
+        tau = taus,
+        estimate = qr_results[,1],
+        lower = qr_results[,1] - 1.96*qr_results[,2],
+        upper = qr_results[,1] + 1.96*qr_results[,2]
+    )
+    
+    p2 <- ggplot(qr_df, aes(x = tau, y = estimate)) +
+        geom_line() +
+        geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2) +
+        geom_hline(yintercept = coef(lm_fit)[2], linetype = "dashed", color = "red") +
+        theme_minimal() +
+        labs(
+            title = "PRS Effect Size by Age Quantile",
+            x = "Age Quantile",
+            y = "Effect Size (years per SD of PRS)"
+        )
+    
+    # Calculate effect sizes for early vs late onset
+    early_effect <- coef(lm(age_diag ~ get(prs_col), 
+                           data = filter(merged_data, onset_cat == "Early")))[2]
+    late_effect <- coef(lm(age_diag ~ get(prs_col), 
+                          data = filter(merged_data, onset_cat == "Late")))[2]
+    
+    return(list(
+        plots = list(scatter = p1, quantile = p2),
+        effects = data.frame(
+            phenotype = pheno,
+            prs = prs_col,
+            early_effect = early_effect,
+            late_effect = late_effect,
+            ratio = early_effect/late_effect,
+            qr_effects = list(qr_results),
+            n = nrow(merged_data)
+        )
+    ))
+}
+
+# Analyze all matched pairs
+results_list <- list()
+plot_list <- list()
+
+for(prs_col in names(prs_mapping)) {
+    result <- analyze_onset_patterns(
+        prs_mapping[[prs_col]],
+        prs_col,
+        Y_sum_df,
+        prs_df
+    )
+    
+    if(!is.null(result)) {
+        results_list[[prs_col]] <- result$effects
+        plot_list[[prs_col]] <- result$plots
+    }
+}
+
+# Combine results
+results_df <- bind_rows(results_list)
+
+# Create summary visualization
+p_summary <- ggplot(results_df, 
+                   aes(x = reorder(phenotype, early_effect), 
+                       y = early_effect)) +
+    geom_point(aes(color = "Early Onset"), size = 3) +
+    geom_point(aes(y = late_effect, color = "Late Onset"), size = 3) +
+    coord_flip() +
+    theme_minimal() +
+    labs(
+        title = "PRS Effects on Early vs Late Disease Onset",
+        x = "Disease",
+        y = "Effect Size (years per SD of PRS)",
+        color = "Onset Type"
+    )
+
+# Save outputs
+ggsave("prs_early_vs_late_effects.pdf", p_summary, width = 12, height = 8)
+
+# Save individual plots for each disease
+for(prs in names(plot_list)) {
+    # Combined plot with patchwork
+    combined_plot <- plot_list[[prs]]$scatter + plot_list[[prs]]$quantile
+    
+    ggsave(
+        paste0("prs_onset_patterns_", tolower(prs), ".pdf"),
+        combined_plot,
+        width = 15,
+        height = 6
+    )
+}
+```
+
+```{r}
+# Load required libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(igraph)
+library(viridis)
+
+
+# Function to extract disease sequences for each individual
+get_disease_sequences <- function(data) {
+    # Order by individual and age of diagnosis
+    sequences <- data %>%
+        arrange(eid, age_diag) %>%
+        group_by(eid) %>%
+        summarise(
+            sequence = list(exclude_name),
+            ages = list(age_diag),
+            n_diseases = n()
+        ) %>%
+        filter(n_diseases >= 3)  # Only look at individuals with multiple diseases
+    
+    return(sequences)
+}
+
+# Function to analyze transitions
+analyze_transitions <- function(sequences) {
+    # Create transition matrix
+    transitions <- data.frame()
+    
+    for(i in 1:nrow(sequences)) {
+        seq <- unlist(sequences$sequence[i])
+        if(length(seq) >= 3) {
+            for(j in 1:(length(seq)-1)) {
+                transitions <- bind_rows(transitions,
+                    data.frame(
+                        from = seq[j],
+                        to = seq[j+1],
+                        eid = sequences$eid[i]
+                    )
+                )
+            }
+        }
+    }
+    
+    # Count transitions
+    transition_counts <- transitions %>%
+        group_by(from, to) %>%
+        summarise(
+            weight = n(),
+            .groups = 'drop'
+        ) %>%
+        filter(weight >= 5)  # Only keep transitions that occur at least 5 times
+    
+    return(list(
+        all_transitions = transitions,
+        counts = transition_counts
+    ))
+}
+
+# Function to analyze genetic effects on transitions
+analyze_genetic_effects <- function(transitions, prs_data) {
+    # Merge with PRS data
+    transitions_prs <- transitions %>%
+        inner_join(prs_data, by = c("eid" = "Identifier"))
+    
+    # Analyze PRS effects on specific transitions
+    results <- list()
+    
+    for(prs_col in names(prs_data)[1:(ncol(prs_data)-1)]) {
+        # Look at how PRS affects each transition type
+        transition_effects <- transitions_prs %>%
+            group_by(from, to) %>%
+            summarise(
+                n = n(),
+                prs_effect = cor(get(prs_col), 1:n(), method="spearman"),
+                .groups = 'drop'
+            ) %>%
+            filter(n >= 20)  # Only analyze transitions with enough data
+        
+        results[[prs_col]] <- transition_effects
+    }
+    
+    return(results)
+}
+
+# Get sequences
+sequences <- get_disease_sequences(Y_sum_df)
+
+# Analyze transitions
+transition_results <- analyze_transitions(sequences[1:1000,])  # Limit to first 1000 for speed
+
+# Create network visualization
+g <- graph_from_data_frame(
+    transition_results$counts,
+    directed = TRUE,
+    vertices = unique(c(transition_results$counts$from, 
+                       transition_results$counts$to))
+)
+
+# Calculate node sizes based on frequency
+node_sizes <- degree(g, mode="in") + degree(g, mode="out")
+
+# Create network plot
+pdf("disease_transitions_network.pdf", width = 12, height = 12)
+plot(g,
+     edge.width = log1p(E(g)$weight),
+     vertex.size = 20 * node_sizes/max(node_sizes),
+     vertex.color = viridis(vcount(g)),
+     vertex.label.cex = 0.6,
+     layout = layout_with_fr,
+     edge.arrow.size = 0.5,
+     main = "Disease Transition Network")
+dev.off()
+
+# Analyze genetic effects
+genetic_effects <- analyze_genetic_effects(
+    transition_results$all_transitions,
+    prs_df
+)
+
+# Create visualization of genetic effects
+pdf("genetic_effects_on_transitions.pdf", width = 15, height = 10)
+par(mfrow=c(2,2))
+for(prs in names(genetic_effects)[1:4]) {  # Show top 4 PRS effects
+    effects_df <- genetic_effects[[prs]]
+    
+    if(nrow(effects_df) > 0) {
+        # Create heatmap of effects
+        effect_matrix <- reshape2::acast(effects_df, from ~ to, value.var = "prs_effect")
+        
+        heatmap(effect_matrix,
+                col = colorRampPalette(c("blue", "white", "red"))(100),
+                main = paste("PRS Effects on Transitions -", prs),
+                cexRow = 0.7,
+                cexCol = 0.7)
+    }
+}
+dev.off()
+
+# Create summary of most common transition patterns
+common_patterns <- sequences %>%
+    filter(n_diseases >= 3) %>%  # Look at sequences of 3 or more diseases
+    mutate(
+        pattern = sapply(sequence, paste, collapse = "->")
+    ) %>%
+    count(pattern, sort = TRUE) %>%
+    head(20)  # Top 20 patterns
+
+# Save results
+write.csv(common_patterns, "common_disease_patterns.csv", row.names = FALSE)
+
+# Print summary
+cat("\nMost common disease transition patterns:\n")
+print(common_patterns)
+
+# Analysis of time between transitions
+time_between <- sequences %>%
+    rowwise() %>%
+    mutate(
+        time_gaps = list(diff(unlist(ages)))
+    ) %>%
+    unnest(time_gaps)
+
+# Create visualization of time between transitions
+p_time <- ggplot(time_between, aes(x = time_gaps)) +
+    geom_histogram(bins = 30, fill = "lightblue", color = "black") +
+    theme_minimal() +
+    labs(
+        title = "Time Between Disease Transitions",
+        x = "Years between diagnoses",
+        y = "Count"
+    )
+
+ggsave("transition_times.pdf", p_time, width = 8, height = 6)
+
+```
+
+```{r}
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# Create toy data for two contrasting trajectories
+trajectory1 <- data.frame(
+  ID = "Patient 1",
+  Disease = c("CVD", "Neoplasm", "Inflammatory"),
+  Age = c(45, 52, 58),
+  Path = "CVD → Neo → Inflammatory"
+)
+
+trajectory2 <- data.frame(
+  ID = "Patient 2",
+  Disease = c("Metabolic", "CVD", "Neoplasm"),
+  Age = c(48, 55, 63),
+  Path = "Metabolic → CVD → Neo"
+)
+
+# Combine trajectories
+toy_data <- rbind(trajectory1, trajectory2)
+
+# Set disease order
+toy_data$Disease <- factor(toy_data$Disease, 
+                          levels = c("Metabolic", "CVD", "Neoplasm", "Inflammatory"))
+
+# Create the visualization
+p <- ggplot(toy_data, aes(x = Age, y = Disease, color = ID)) +
+  geom_point(size = 4) +
+  geom_path(size = 1.2, arrow = arrow(length = unit(0.3, "cm"), type = "closed")) +
+  facet_wrap(~ID, ncol = 1) +
+  theme_minimal() +
+  theme(
+    panel.grid.minor = element_blank(),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    strip.text = element_text(size = 14, face = "bold"),
+    legend.position = "none"
+  ) +
+  scale_color_manual(values = c("#E69F00", "#56B4E9")) +
+  labs(
+    x = "Age at Diagnosis",
+    y = "Disease Category",
+    title = "Example Disease Trajectories",
+    subtitle = "Two common patterns of disease progression"
+  ) +
+  scale_x_continuous(breaks = seq(40, 70, by = 5))
+
+# Save the plot
+ggsave("toy_trajectories.pdf", p, width = 10, height = 8)
+
+# Create alternate version with multiple patients per pattern
+multi_patients <- data.frame(
+  ID = rep(paste("Patient", 1:6), each = 3),
+  Pattern = rep(c("Pattern 1: CVD → Neo → Inflammatory",
+                 "Pattern 2: Metabolic → CVD → Neo"), each = 9),
+  Disease = c(rep(c("CVD", "Neoplasm", "Inflammatory"), 3),
+              rep(c("Metabolic", "CVD", "Neoplasm"), 3)),
+  Age = c(
+    # Pattern 1 patients
+    45, 52, 58,  # Patient 1
+    42, 50, 55,  # Patient 2
+    48, 54, 61,  # Patient 3
+    # Pattern 2 patients
+    48, 55, 63,  # Patient 4
+    45, 53, 60,  # Patient 5
+    50, 58, 65   # Patient 6
+  )
+)
+
+# Set disease order
+multi_patients$Disease <- factor(multi_patients$Disease, 
+                               levels = c("Metabolic", "CVD", "Neoplasm", "Inflammatory"))
+
+# Create plot with multiple patients per pattern
+p2 <- ggplot(multi_patients, aes(x = Age, y = Disease, group = ID, color = ID)) +
+  geom_point(size = 3) +
+  geom_path(size = 1, arrow = arrow(length = unit(0.2, "cm"), type = "closed")) +
+  facet_wrap(~Pattern, ncol = 1) +
+  theme_minimal() +
+  theme(
+    panel.grid.minor = element_blank(),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    strip.text = element_text(size = 12, face = "bold"),
+    legend.position = "right"
+  ) +
+  scale_color_viridis_d() +
+  labs(
+    x = "Age at Diagnosis",
+    y = "Disease Category",
+    title = "Common Disease Trajectories",
+    subtitle = "Multiple examples of each progression pattern"
+  ) +
+  scale_x_continuous(breaks = seq(40, 70, by = 5))
+
+# Save the second plot
+ggsave("toy_trajectories_multiple.pdf", p2, width = 12, height = 10)
+
+# Create a version showing timing distributions
+set.seed(42)
+n_per_pattern <- 50
+
+# Function to generate ages with some random variation
+generate_ages <- function(base_ages, n) {
+  t(sapply(1:n, function(i) {
+    base_ages + rnorm(length(base_ages), mean = 0, sd = 2)
+  }))
+}
+
+# Generate data for many patients
+pattern1_ages <- generate_ages(c(45, 52, 58), n_per_pattern)
+pattern2_ages <- generate_ages(c(48, 55, 63), n_per_pattern)
+
+distribution_data <- data.frame(
+  ID = rep(paste("Patient", 1:(2*n_per_pattern)), each = 3),
+  Pattern = rep(c("Pattern 1: CVD → Neo → Inflammatory",
+                 "Pattern 2: Metabolic → CVD → Neo"), 
+               each = n_per_pattern * 3),
+  Disease = c(rep(c("CVD", "Neoplasm", "Inflammatory"), n_per_pattern),
+              rep(c("Metabolic", "CVD", "Neoplasm"), n_per_pattern)),
+  Age = c(pattern1_ages, pattern2_ages)
+)
+
+# Set disease order
+distribution_data$Disease <- factor(distribution_data$Disease, 
+                                  levels = c("Metabolic", "CVD", "Neoplasm", "Inflammatory"))
+
+# Create violin plot showing distributions
+p3 <- ggplot(distribution_data, aes(x = Disease, y = Age, fill = Disease)) +
+  geom_violin(trim = FALSE, alpha = 0.7) +
+  geom_boxplot(width = 0.2, alpha = 0.5) +
+  facet_wrap(~Pattern, ncol = 1) +
+  theme_minimal() +
+  theme(
+    panel.grid.minor = element_blank(),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    strip.text = element_text(size = 12, face = "bold"),
+    legend.position = "none"
+  ) +
+  scale_fill_viridis_d() +
+  labs(
+    x = "Disease Category",
+    y = "Age at Diagnosis",
+    title = "Age Distribution of Disease Onset",
+    subtitle = "Showing typical timing patterns for each trajectory"
+  )
+
+# Save the third plot
+ggsave("toy_trajectories_distributions.pdf", p3, width = 12, height = 10)
+      
+
+```
+
+```{r}
+# Load required libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(viridis)
+
+# Create example patient trajectories
+# Generate toy data for 3 different patient patterns
+set.seed(42)
+
+# Function to create smooth transitions between timepoints
+interpolate_loadings <- function(start_loads, end_loads, n_points = 10) {
+  t <- seq(0, 1, length.out = n_points)
+  sapply(1:length(start_loads), function(i) {
+    start_loads[i] + (end_loads[i] - start_loads[i]) * t
+  })
+}
+
+# Define main disease categories
+disease_cats <- c("circulatory system", "neoplasms", "digestive", 
+                 "respiratory", "mental disorders", "neurological",
+                 "endocrine/metabolic", "infectious diseases")
+
+# Create three different patient trajectories
+create_patient_trajectory <- function(pattern_type, n_timepoints = 50) {
+  age_seq <- seq(40, 70, length.out = n_timepoints)
+  
+  if(pattern_type == 1) {
+    # Pattern 1: CVD → Neoplasm progression
+    start_loads <- c(0.3, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1)
+    mid_loads <- c(0.4, 0.2, 0.1, 0.1, 0.05, 0.05, 0.05, 0.05)
+    end_loads <- c(0.3, 0.4, 0.1, 0.05, 0.05, 0.05, 0.025, 0.025)
+  } else if(pattern_type == 2) {
+    # Pattern 2: Metabolic → CVD progression
+    start_loads <- c(0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.3, 0.1)
+    mid_loads <- c(0.2, 0.1, 0.1, 0.1, 0.1, 0.1, 0.2, 0.1)
+    end_loads <- c(0.4, 0.1, 0.1, 0.1, 0.05, 0.05, 0.15, 0.05)
+  } else {
+    # Pattern 3: Inflammatory/Infectious → Multiple systems
+    start_loads <- c(0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.3)
+    mid_loads <- c(0.15, 0.15, 0.2, 0.15, 0.1, 0.1, 0.1, 0.15)
+    end_loads <- c(0.2, 0.2, 0.2, 0.2, 0.05, 0.05, 0.05, 0.05)
+  }
+  
+  # Create smooth transitions
+  first_half <- t(interpolate_loadings(start_loads, mid_loads, n_timepoints/2))
+  second_half <- t(interpolate_loadings(mid_loads, end_loads, n_timepoints/2))
+  loadings <- rbind(first_half, second_half[-1,])
+  
+  # Create dataframe
+  data.frame(
+    Age = age_seq,
+    Pattern = paste("Patient Type", pattern_type),
+    t(loadings)
+  ) %>%
+    setNames(c("Age", "Pattern", disease_cats))
+}
+
+# Generate data for each pattern
+pattern1 <- create_patient_trajectory(1)
+pattern2 <- create_patient_trajectory(2)
+pattern3 <- create_patient_trajectory(3)
+
+# Combine all patterns
+all_patterns <- bind_rows(pattern1, pattern2, pattern3)
+
+# Convert to long format for plotting
+plot_data <- all_patterns %>%
+  pivot_longer(
+    cols = -c(Age, Pattern),
+    names_to = "Disease",
+    values_to = "Loading"
+  )
+
+# Create stacked area plot
+p1 <- ggplot(plot_data, aes(x = Age, y = Loading, fill = Disease)) +
+  geom_area(position = "stack") +
+  facet_wrap(~Pattern, ncol = 1) +
+  scale_fill_viridis_d() +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    axis.title = element_text(size = 12)
+  ) +
+  labs(
+    title = "Disease Loading Trajectories",
+    subtitle = "Showing proportional disease burden over time",
+    x = "Age",
+    y = "Disease Loading",
+    fill = "Disease Category"
+  )
+
+# Save the plot
+ggsave("disease_loading_trajectories.pdf", p1, width = 12, height = 12)
+
+# Create alternative visualization with heatmap style
+p2 <- ggplot(plot_data, aes(x = Age, y = Disease, fill = Loading)) +
+  geom_tile() +
+  facet_wrap(~Pattern, ncol = 1) +
+  scale_fill_viridis_c() +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    panel.grid = element_blank(),
+    strip.text = element_text(size = 12, face = "bold"),
+    axis.text.y = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    axis.title = element_text(size = 12)
+  ) +
+  labs(
+    title = "Disease Loading Patterns",
+    subtitle = "Heatmap showing disease burden intensity over time",
+    x = "Age",
+    y = "Disease Category",
+    fill = "Loading"
+  )
+
+# Save the heatmap version
+ggsave("disease_loading_heatmap.pdf", p2, width = 12, height = 12)
+
+# Create small multiples showing individual disease trajectories
+p3 <- ggplot(plot_data, aes(x = Age, y = Loading, color = Pattern)) +
+  geom_line(size = 1) +
+  facet_wrap(~Disease, scales = "free_y") +
+  scale_color_viridis_d() +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(size = 10, face = "bold"),
+    axis.text = element_text(size = 8)
+  ) +
+  labs(
+    title = "Individual Disease Category Trajectories",
+    x = "Age",
+    y = "Loading",
+    color = "Patient Type"
+  )
+
+# Save the small multiples version
+ggsave("disease_loading_individual.pdf", p3, width = 15, height = 10)
+
+````
+
+```{r}
+# Load required libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(viridis)
+
+# Define disease categories
+disease_cats <- c(
+  "infectious.diseases",
+  "neoplasms",
+  "endocrine.metabolic",
+  "circulatory.system",
+  "respiratory",
+  "digestive",
+  "mental.disorders",
+  "neurological"
+)
+
+# Function to ensure loadings sum to 1
+normalize_loadings <- function(x) {
+  x / sum(x)
+}
+
+# Function to create smooth transitions between timepoints
+create_trajectory <- function(age_range = seq(40, 70, length.out = 50), 
+                            keypoints) {
+  # Interpolate between keypoints
+  result <- matrix(nrow = length(age_range), ncol = length(disease_cats))
+  
+  for(i in 1:(nrow(keypoints)-1)) {
+    start_idx <- (i-1) * length(age_range)/(nrow(keypoints)-1) + 1
+    end_idx <- i * length(age_range)/(nrow(keypoints)-1)
+    indices <- round(start_idx:end_idx)
+    
+    # Create smooth transition
+    for(j in 1:length(disease_cats)) {
+      result[indices, j] <- approx(
+        c(1, length(indices)),
+        c(keypoints[i,j], keypoints[i+1,j]),
+        1:length(indices)
+      )$y
+    }
+  }
+  
+  # Normalize each row to sum to 1
+  result <- t(apply(result, 1, normalize_loadings))
+  colnames(result) <- disease_cats
+  
+  return(data.frame(
+    Age = age_range,
+    as.data.frame(result)
+  ))
+}
+
+# Create three distinct patient trajectories
+# Patient 1: Circulatory -> Neoplasm progression
+p1_keypoints <- matrix(c(
+  0.1, 0.1, 0.1, 0.3, 0.1, 0.1, 0.1, 0.1,  # Start: high circulatory
+  0.1, 0.2, 0.1, 0.3, 0.1, 0.1, 0.05, 0.05,  # Mid: increasing neoplasm
+  0.05, 0.4, 0.05, 0.2, 0.1, 0.1, 0.05, 0.05  # End: high neoplasm
+), nrow = 3, byrow = TRUE)
+
+# Patient 2: Metabolic -> Circulatory progression
+p2_keypoints <- matrix(c(
+  0.1, 0.1, 0.3, 0.1, 0.1, 0.1, 0.1, 0.1,  # Start: high metabolic
+  0.1, 0.1, 0.2, 0.3, 0.1, 0.1, 0.05, 0.05,  # Mid: increasing circulatory
+  0.05, 0.1, 0.15, 0.4, 0.1, 0.1, 0.05, 0.05  # End: high circulatory
+), nrow = 3, byrow = TRUE)
+
+# Patient 3: Infectious -> Multiple systems
+p3_keypoints <- matrix(c(
+  0.3, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,  # Start: high infectious
+  0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.05, 0.05,  # Mid: spreading
+  0.1, 0.2, 0.15, 0.15, 0.15, 0.15, 0.05, 0.05  # End: multiple systems
+), nrow = 3, byrow = TRUE)
+
+# Generate trajectories
+traj1 <- create_trajectory(keypoints = p1_keypoints) %>% mutate(Pattern = "Patient 1: CVD → Neoplasm")
+traj2 <- create_trajectory(keypoints = p2_keypoints) %>% mutate(Pattern = "Patient 2: Metabolic → CVD")
+traj3 <- create_trajectory(keypoints = p3_keypoints) %>% mutate(Pattern = "Patient 3: Infectious → Multiple")
+
+# Combine trajectories
+all_trajectories <- bind_rows(traj1, traj2, traj3)
+
+# Convert to long format
+plot_data <- all_trajectories %>%
+  pivot_longer(
+    cols = all_of(disease_cats),
+    names_to = "Disease",
+    values_to = "Loading"
+  )
+
+# Create streamgraph
+p1 <- ggplot(plot_data, aes(x = Age, y = Loading, fill = Disease)) +
+  geom_area(position = "fill") +
+  facet_wrap(~Pattern, ncol = 1) +
+  scale_fill_viridis_d() +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    axis.title = element_text(size = 12)
+  ) +
+  labs(
+    title = "Disease Loading Trajectories",
+    subtitle = "Showing relative disease burden over time",
+    x = "Age",
+    y = "Proportion of Disease Burden",
+    fill = "Disease Category"
+  ) +
+  scale_y_continuous(labels = scales::percent)
+
+# Save the main plot
+ggsave("disease_proportions_stream.pdf", p1, width = 12, height = 12)
+
+# Create heatmap version
+p2 <- ggplot(plot_data, aes(x = Age, y = Disease, fill = Loading)) +
+  geom_tile() +
+  facet_wrap(~Pattern, ncol = 1) +
+  scale_fill_viridis_c(limits = c(0, 0.4)) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    panel.grid = element_blank(),
+    strip.text = element_text(size = 12, face = "bold"),
+    axis.text.y = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    axis.title = element_text(size = 12)
+  ) +
+  labs(
+    title = "Disease Loading Patterns",
+    subtitle = "Heatmap showing relative disease burden over time",
+    x = "Age",
+    y = "Disease Category",
+    fill = "Proportion"
+  )
+
+# Save the heatmap
+ggsave("disease_proportions_heatmap.pdf", p2, width = 12, height = 12)
+
+# Create individual trajectories plot
+p3 <- ggplot(plot_data, aes(x = Age, y = Loading, color = Pattern)) +
+  geom_line(size = 1) +
+  facet_wrap(~Disease) +
+  scale_color_viridis_d() +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(size = 10, face = "bold"),
+    axis.text = element_text(size = 8)
+  ) +
+  labs(
+    title = "Disease Category Trajectories",
+    x = "Age",
+    y = "Proportion of Disease Burden",
+    color = "Trajectory Pattern"
+  ) +
+  scale_y_continuous(limits = c(0, 0.4), labels = scales::percent)
+
+# Save the individual trajectories
+ggsave("disease_proportions_individual.pdf", p3, width = 15, height = 10)
+```
+
+
+```{r}
+# Load required libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(RColorBrewer)
+
+# Use same data generation code as before, but change visualization
+# [Previous data generation code remains the same until plotting]
+
+# Create heatmap with brighter colors
+p2 <- ggplot(plot_data, aes(x = Age, y = Disease, fill = Loading)) +
+  geom_tile() +
+  facet_wrap(~Pattern, ncol = 1) +
+  # Use a brighter color palette
+  scale_fill_gradientn(
+    colors = c(
+      "#FFFFFF",  # white for zero
+      "#FFF7BC",  # very light yellow
+      "#FFA07A",  # light salmon
+      "#FF4500",  # orange red
+      "#FF0000"   # bright red
+    ),
+    limits = c(0, 0.4),
+    breaks = seq(0, 0.4, by = 0.1),
+    labels = scales::percent
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    panel.grid = element_blank(),
+    strip.text = element_text(size = 12, face = "bold"),
+    axis.text.y = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    axis.title = element_text(size = 12),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 12),
+    panel.background = element_rect(fill = "white", color = NA),
+    strip.background = element_rect(fill = "gray95", color = NA),
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 9)
+  ) +
+  labs(
+    title = "Disease Loading Patterns",
+    subtitle = "Heatmap showing relative disease burden over time",
+    x = "Age",
+    y = "Disease Category",
+    fill = "Disease\nBurden"
+  )
+
+# Try alternative color scheme
+p3 <- ggplot(plot_data, aes(x = Age, y = Disease, fill = Loading)) +
+  geom_tile() +
+  facet_wrap(~Pattern, ncol = 1) +
+  # Use a more vibrant diverging palette
+  scale_fill_gradientn(
+    colors = c(
+      "#FFFFFF",      # white
+      "#FFE29D",      # light yellow
+      "#FFA07A",      # light salmon
+      "#FF4E50",      # coral red
+      "#E31A1C"       # bright red
+    ),
+    limits = c(0, 0.4),
+    breaks = seq(0, 0.4, by = 0.1),
+    labels = scales::percent
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    panel.grid = element_blank(),
+    strip.text = element_text(size = 12, face = "bold"),
+    axis.text.y = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    axis.title = element_text(size = 12),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 12),
+    panel.background = element_rect(fill = "white", color = NA),
+    strip.background = element_rect(fill = "gray95", color = NA),
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 9)
+  ) +
+  labs(
+    title = "Disease Loading Patterns",
+    subtitle = "Heatmap showing relative disease burden over time",
+    x = "Age",
+    y = "Disease Category",
+    fill = "Disease\nBurden"
+  )
+
+# Save both versions
+ggsave("disease_heatmap_bright1.pdf", p2, width = 12, height = 12)
+ggsave("disease_heatmap_bright2.pdf", p3, width = 12, height = 12)
+
+# Create a third version with an even more vibrant scheme
+p4 <- ggplot(plot_data, aes(x = Age, y = Disease, fill = Loading)) +
+  geom_tile() +
+  facet_wrap(~Pattern, ncol = 1) +
+  # Use a highly saturated diverging palette
+  scale_fill_gradientn(
+    colors = c(
+      "#FFFFFF",      # white
+      "#FFF200",      # bright yellow
+      "#FF9933",      # bright orange
+      "#FF3333",      # bright red
+      "#990000"       # dark red
+    ),
+    limits = c(0, 0.4),
+    breaks = seq(0, 0.4, by = 0.1),
+    labels = scales::percent
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    panel.grid = element_blank(),
+    strip.text = element_text(size = 12, face = "bold"),
+    axis.text.y = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    axis.title = element_text(size = 12),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 12),
+    panel.background = element_rect(fill = "white", color = NA),
+    strip.background = element_rect(fill = "gray95", color = NA),
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 9)
+  ) +
+  labs(
+    title = "Disease Loading Patterns",
+    subtitle = "Heatmap showing relative disease burden over time",
+    x = "Age",
+    y = "Disease Category",
+    fill = "Disease\nBurden"
+  )
+
+ggsave("disease_heatmap_bright3.pdf", p4, width = 12, height = 12)
+```
+
+```{r}
+# Get the column names from d
+d_cols <- colnames(d)
+
+# Get the mapping from ATM package
+phecode_map <- ATM::disease_info_phecode_icd10[, c("phecode", "phenotype")]
+
+# Convert phecodes to match format in d_cols
+phecode_map$phecode <- as.character(phecode_map$phecode)
+
+# Create a mapping function to handle different formats
+format_phecode <- function(x) {
+    # Convert decimal points to match format
+    if(grepl("\\.", x)) {
+        # If already has decimal, just convert to character
+        return(as.character(x))
+    } else {
+        # If no decimal, add .0
+        return(paste0(x, ".0"))
+    }
+}
+
+# Apply formatting to both sets
+d_cols_formatted <- sapply(d_cols, format_phecode)
+phecode_map$phecode_formatted <- sapply(phecode_map$phecode, format_phecode)
+
+# Match and create named vector
+disease_names <- phecode_map$phenotype[match(d_cols_formatted, phecode_map$phecode_formatted)]
+
+# Check first few matches
+head(data.frame(
+    code = d_cols,
+    phenotype = disease_names
+))
+
+# Save for later use
+saveRDS(disease_names, "~/Dropbox (Personal)/disease_names.rds")
