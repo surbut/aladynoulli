@@ -1,0 +1,408 @@
+---
+title: "plottingAladynoulli"
+format: html
+---
+
+## Quarto
+
+Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+
+## Running Code
+
+When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
+```{r}
+
+library(tidyverse)
+library(reticulate)
+
+# 2. Activate the environment
+use_condaenv("r-tensornoulli")
+
+# 3. Install required packages
+#conda_install("r-tensornoulli", packages = c("numpy", "pandas", "scipy"))
+
+# 4. Verify installation
+py_config()  # Should show your new environment
+
+# Load the saved model data
+model_data <- py_load_object("~/Dropbox (Personal)//aladyn_model_full.pkl")
+lambda=model_data$lambda
+phi=model_data$phi
+Y=model_data$Y
+event_times=model_data$event_times
+disease_names=model_data$disease_names
+```
+
+```{r}
+library(reshape2)
+theta=aperm(apply(lambda,c(1,3),function(x){exp(x)/sum(exp(x))}),c(2,1,3))
+l=melt(theta)
+colnames(l)=c("Individual","Signature","Time","value")
+p=ggplot(l[l$Individual%in%sample(1:9661,5),],aes(Time,value,fill=as.factor(Signature)))+geom_area()+facet_wrap(~Individual)+scale_fill_futurama()+labs(x="Time (years from 30)",y="Probability",title="Signature probabilities over time",fill="Signature")
+
+
+ggsave(p, filename = "signature_probabilities_indvidiaul.pdf", width = 6, height = 4)
+
+```
+
+You can add options to executable code like this 
+
+```{r}
+
+disease_names=readRDS("~/Dropbox (Personal)/disease_names.rds")
+phi_logit=aperm(plogis(phi),c(2,1,3))
+rownames(phi_logit)=disease_names
+l=melt(phi_logit)
+colnames(l)=c("Disease","Signature","Time","value")
+p2=ggplot(l[l$Disease%in%c("Coronary atherosclerosis","Myocardial infarction","Angina pectors","Atrial fibrillation and flutter","Congestive heart failure (CHF) NOS"),],aes(Time,value,fill=as.factor(Signature)))+
+  geom_area()+facet_wrap(~Disease)+scale_fill_futurama()+labs(x="Time (years from 30)",y="Probability",title="Signature probabilities over time",fill="Signature")
+ggsave(p2, filename = "signature_probabilities_disease.pdf", width = 6, height = 4)
+
+```
+
+
+
+
+```{r}
+
+# Function to calculate remaining lifetime risk from annual transitions
+calc_remaining_risk <- function(pi_pred, from_age) {
+  # Convert from 3D array to more manageable form
+  N <- dim(pi_pred)[1]
+  D <- dim(pi_pred)[2]
+  T <- dim(pi_pred)[3]
+  
+  # For each person and disease, calculate probability of developing disease 
+  # between from_age and end of follow-up
+  remaining_risk <- array(0, dim=c(N, D))
+  
+  for(n in 1:N) {
+    for(d in 1:D) {
+      # Get annual transition probabilities from from_age onwards
+      yearly_pi <- pi_pred[n, d, from_age:T]
+      # Probability of developing = 1 - prob of never developing
+      remaining_risk[n,d] <- 1 - prod(1 - yearly_pi)
+    }
+  }
+  
+  return(remaining_risk)
+}
+
+# Calculate remaining risk at different ages
+ages <- seq(30, 75, by=5)
+aladyn_risks <- list()
+
+for(age in ages) {
+  time_idx <- age - 29  # Convert age to time index
+  aladyn_risks[[as.character(age)]] <- calc_remaining_risk(model_data$pi_pred, time_idx)
+}
+
+
+```
+
+```{r}
+# Function to fit Cox model and get predicted risks
+# Function to fit Cox model and get predicted risks
+fit_cox_risk <- function(event_times, event, sex, smoke, from_age) {
+  N <- length(event_times)
+  all_risks <- rep(NA, N)  # Initialize risks for everyone
+  
+  # Create survival data
+  df <- data.frame(
+    id = 1:N,
+    time = as.numeric(event_times),
+    event = event,
+    sex = sex,
+    smoke = smoke
+  )
+  
+  # Get indices of people still at risk
+  at_risk_idx <- which(df$time > from_age)
+  
+  if(length(at_risk_idx) > 0) {
+    # Create filtered dataset
+    df_risk <- df[at_risk_idx,]
+    df_risk$time <- df_risk$time - from_age
+    
+    # Fit Cox and get risks for at-risk people
+    cox_fit <- coxph(Surv(time, event) ~ sex + smoke, data=df_risk)
+    at_risk_risks <- 1 - exp(-predict(cox_fit, type="expected"))
+    
+    # Assign risks back to full population
+    all_risks[at_risk_idx] <- at_risk_risks
+  }
+  
+  return(all_risks)
+}
+
+# Calculate risks at each age
+cox_risks <- list()
+for(age in ages) {
+  time_idx <- age - 29
+  cox_risks[[as.character(age)]] <- matrix(NA, nrow=N, ncol=D)
+  
+  for(d in 1:D) {
+    cox_risks[[as.character(age)]][,d] <- fit_cox_risk(
+      event_times = model_data$event_times[,d]+1,
+      event = rowSums(Y[,d,time_idx:T]),  # Sum future events
+      sex = model_data$metadata$sex,
+      smoke = model_data$metadata$smoke,
+      from_age = time_idx
+    )
+  }
+}
+```
+
+
+```{r}
+library(pROC)
+
+
+library(pROC)
+# Print summary
+disease_name_list <- disease_names
+# Compare for each age and disease
+results <- data.frame()
+for(age in ages) {
+  for(d in 1:D) {
+    # Get predictions
+    aladyn_pred <- aladyn_risks[[as.character(age)]][,d]
+    cox_pred <- cox_risks[[as.character(age)]][,d]
+    
+    # Get actual outcomes (future events)
+    time_idx <- age - 29
+    true_outcome <- rowSums(Y[,d,time_idx:T]) > 0
+    
+    # Calculate AUCs for non-NA predictions and where we have both outcomes
+    valid_idx <- !is.na(cox_pred)
+    if(sum(valid_idx) > 0) {
+      # Check if we have both positive and negative cases
+      if(sum(true_outcome[valid_idx]) > 0 && 
+         sum(!true_outcome[valid_idx]) > 0) {
+        
+        auc_aladyn <- auc(true_outcome[valid_idx], aladyn_pred[valid_idx])
+        auc_cox <- auc(true_outcome[valid_idx], cox_pred[valid_idx])
+        
+        results <- rbind(results, data.frame(
+          age = age,
+          disease = d,
+          disease_name = disease_name_list[d],
+          auc_aladyn = auc_aladyn,
+          auc_cox = auc_cox,
+          n_at_risk = sum(valid_idx),
+          n_events = sum(true_outcome[valid_idx])
+        ))
+      }
+    }
+  }
+}
+
+
+print(head(results[order(results$auc_aladyn,decreasing = T),]))
+
+mean(results$auc_cox>results$auc_aladyn)
+
+```
+
+
+```{r}
+# Function to fit Cox models and get predicted risks
+fit_cox_models <- function(event_times, event, sex, smoke, aladyn_pred, from_age) {
+  N <- length(event_times)
+  all_risks <- data.frame(
+    cox_basic = rep(NA, N),
+    cox_aladyn = rep(NA, N),
+    cox_combined = rep(NA, N)
+  )
+  
+  # Create survival data
+  df <- data.frame(
+    id = 1:N,
+    time = as.numeric(event_times),
+    event = event,
+    sex = sex,
+    smoke = smoke,
+    aladyn_pred = aladyn_pred
+  )
+  
+  # Get indices of people still at risk
+  at_risk_idx <- which(df$time > from_age)
+  
+  if(length(at_risk_idx) > 0) {
+    df_risk <- df[at_risk_idx,]
+    df_risk$time <- df_risk$time - from_age
+    
+    # Fit three models
+    cox_basic <- coxph(Surv(time, event) ~ sex + smoke, data=df_risk)
+    cox_aladyn <- coxph(Surv(time, event) ~ aladyn_pred, data=df_risk)
+    cox_combined <- coxph(Surv(time, event) ~ sex + smoke + aladyn_pred, data=df_risk)
+    
+    # Get risks for each model
+    all_risks$cox_basic[at_risk_idx] <- 1 - exp(-predict(cox_basic, type="expected"))
+    all_risks$cox_aladyn[at_risk_idx] <- 1 - exp(-predict(cox_aladyn, type="expected"))
+    all_risks$cox_combined[at_risk_idx] <- 1 - exp(-predict(cox_combined, type="expected"))
+  }
+  
+  return(all_risks)
+}
+
+# Calculate risks for all models at each age
+all_risks <- list()
+for(age in ages) {
+  time_idx <- age - 29
+  all_risks[[as.character(age)]] <- array(NA, dim=c(N, D, 3))  # 3 models
+  
+  for(d in 1:D) {
+    risks <- fit_cox_models(
+      event_times = model_data$event_times[,d]+1,
+      event = rowSums(Y[,d,time_idx:T]),
+      sex = model_data$metadata$sex,
+      smoke = model_data$metadata$smoke,
+      aladyn_pred = aladyn_risks[[as.character(age)]][,d],
+      from_age = time_idx
+    )
+    
+    all_risks[[as.character(age)]][,d,] <- as.matrix(risks)
+  }
+}
+
+# Compare performance
+results <- data.frame()
+for(age in ages) {
+  for(d in 1:D) {
+    # Get predictions from all models
+    basic_pred <- all_risks[[as.character(age)]][,d,1]
+    aladyn_pred <- all_risks[[as.character(age)]][,d,2]
+    combined_pred <- all_risks[[as.character(age)]][,d,3]
+    
+    # Get actual outcomes
+    time_idx <- age - 29
+    true_outcome <- rowSums(Y[,d,time_idx:T]) > 0
+    
+    # Calculate AUCs
+    valid_idx <- !is.na(basic_pred)
+    if(sum(valid_idx) > 0 && 
+       sum(true_outcome[valid_idx]) > 0 && 
+       sum(!true_outcome[valid_idx]) > 0) {
+      
+      auc_basic <- auc(true_outcome[valid_idx], basic_pred[valid_idx])
+      auc_aladyn <- auc(true_outcome[valid_idx], aladyn_pred[valid_idx])
+      auc_combined <- auc(true_outcome[valid_idx], combined_pred[valid_idx])
+      
+      results <- rbind(results, data.frame(
+        age = age,
+        disease = d,
+        disease_name = disease_name_list[d],
+        auc_basic = auc_basic,
+        auc_aladyn = auc_aladyn,
+        auc_combined = auc_combined,
+        n_at_risk = sum(valid_idx),
+        n_events = sum(true_outcome[valid_idx])
+      ))
+    }
+  }
+}
+
+
+# Calculate means and SDs
+sum <- results[,c("auc_basic","auc_aladyn","auc_combined")]
+means <- apply(sum,2,mean)
+sds <- apply(sum,2,sd)
+
+# Create nicer plot
+barplot(means, 
+        ylim=c(0,1.1),
+        col=c("lightgray","skyblue","lightgreen"),
+        names.arg=c("Basic\n(sex+smoke)", "Aladynoulli", "Combined"),
+      
+        ylab="AUC Across all Diseases of remaining risk")
+
+# Add error bars
+arrows(seq(0.7,2.7,1), means-sds, seq(0.7,2.7,1), means+sds, 
+       code=3, angle=90, length=0.05)
+
+# Add numeric values
+text(seq(0.7,2.7,1), means+0.05, 
+     sprintf("%.3f", means))
+
+# Add legend
+legend("bottomleft", 
+       c(paste("n diseases = 348"),
+         paste("mean number at risk=", round(mean(results$n_at_risk),1)),
+       bty="n"))
+```
+
+
+```{r}
+groups=readRDS("~/Dropbox (Personal)/disease_groups.rds")
+results$auc_improvement <- results$auc_aladyn - results$auc_basic
+results$rel_improvement <- (results$auc_aladyn - results$auc_basic)/results$auc_basic
+
+# Look at where Aladyn helps most
+top_improvements <- results[order(-results$auc_improvement),]
+head(top_improvements[,c("disease_name", "age", "auc_basic", "auc_combined", 
+                        "auc_improvement", "n_events")])
+
+# 2. Disease-group specific analysis
+results_by_group <- merge(results, groups[,c("phenotype","exclude_name")], 
+                         by.x="disease_name", by.y="phenotype")
+
+ggsave(ggplot(results_by_group,aes(x=exclude_name,y=auc_improvement,fill=exclude_name))+geom_boxplot()+theme_classic()+labs(y="AUC Improvement",x="Group",fill="Group")+theme(axis.text.x = element_text(angle = 90)),filename = "auc_improvement_by_group.pdf",width = 6, height = 4)
+
+
+
+ggsave(
+  ggplot(results_by_group,aes(x=age,y=auc_improvement,fill=as.factor(age),group=as.factor(age)))+geom_boxplot()+theme_classic()+labs(y="AUC Improvement",x="Age",fill="Age")+theme(axis.text.x = element_text(angle = 90))
+                                                                                                                                       ,filename="auc_improvement_by_age.pdf",width = 6, height = 4)
+```
+
+
+```{r}
+pi_pred=model_data$pi_pred
+analyze_conditionals <- function(d1, d2, age) {
+  time_idx <- age - 29
+  
+  # Get people at risk for d2
+  at_risk <- event_times[,d2] > time_idx
+  
+  # Calculate probabilities
+  marginal <- mean(pi_pred[at_risk, d2, time_idx])
+  
+  # Conditional on having d1
+  has_d1 <- rowSums(Y[, d1, 1:time_idx]) > 0
+  cond_yes <- mean(pi_pred[at_risk & has_d1, d2, time_idx])
+  cond_no <- mean(pi_pred[at_risk & !has_d1, d2, time_idx])
+  
+  # Risk ratios
+  rr <- cond_yes/cond_no
+  
+  return(data.frame(
+    disease1 = disease_name_list[d1],
+    disease2 = disease_name_list[d2],
+    age = age,
+    marginal = marginal,
+    cond_yes = cond_yes,
+    cond_no = cond_no,
+    risk_ratio = rr
+  ))
+}
+
+ages=seq(31,80,by=5)
+disease_name_list <- disease_names
+D=length(disease_name_list)
+# Calculate for all pairs of diseases
+# Look at all disease pairs at different ages
+pairs_analysis <- data.frame()
+for(age in ages) {
+  for(d1 in 1:D) {
+    for(d2 in 1:D) {
+      if(d1 != d2) {
+        res <- analyze_conditionals(d1, d2, age)
+        pairs_analysis <- rbind(pairs_analysis, res)
+      }
+    }
+  }
+}
+
+# Find strongest associations
+top_pairs <- pairs_analysis[order(-pairs_analysis$risk_ratio),]
