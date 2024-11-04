@@ -51,6 +51,7 @@ You can add options to executable code like this
 
 disease_names=readRDS("~/Dropbox (Personal)/disease_names.rds")
 phi_logit=aperm(plogis(phi),c(2,1,3))
+phi_logit=aperm(phi,c(2,1,3))
 rownames(phi_logit)=disease_names
 l=melt(phi_logit)
 colnames(l)=c("Disease","Signature","Time","value")
@@ -60,7 +61,64 @@ ggsave(p2, filename = "signature_probabilities_disease.pdf", width = 6, height =
 
 ```
 
+```{r}
+library(ggplot2)
+library(viridis)  # for better color gradients
 
+l=merge(l,groups,by.x="Disease",by.y="phenotype",all.x=TRUE)
+# Adjusted ggplot
+p2 <- ggplot(l, aes(Time, Disease, fill = value)) +
+  geom_tile() +
+  facet_wrap(~ Signature) +
+  labs(x = "Time (years from 30)", y = NULL,  # Removes y-axis label
+       title = "Signature probabilities over time", fill = "Signature") +
+  scale_fill_viridis(option = "C", direction = -1) +  # Cool-looking viridis color scheme
+  theme(axis.text.y = element_blank(),  # Removes y-axis text
+        axis.ticks.y = element_blank())  # Removes y-axis ticks
+
+library(dplyr)
+library(ggplot2)
+library(viridis)
+
+# Step 1: Calculate the average value for ranking
+top_diseases <- l %>%
+  group_by(Signature, Disease) %>%
+  summarize(avg_value = mean(value, na.rm = TRUE)) %>%
+  group_by(Signature) %>%
+  arrange(Signature, desc(avg_value)) %>%
+  slice_head(n = 20) %>%
+  ungroup()
+
+# Step 2: Create a unique Disease-Signature combination for filtering
+l_top <- l %>%
+  inner_join(top_diseases, by = c("Signature", "Disease")) %>%
+  merge(groups, by.x = "Disease", by.y = "phenotype", all.x = TRUE)
+
+# Step 3: Create separate disease orders for each signature
+l_top <- l_top %>%
+  group_by(Signature) %>%
+  mutate(Disease = factor(Disease, 
+                         levels = unique(Disease[order(avg_value,decreasing = F)]))) %>%
+  ungroup()
+
+# Step 4: Plot with free_y scales to allow different diseases per facet
+p2 <- ggplot(l_top, aes(Time, Disease, fill = value)) +
+  geom_tile() +
+  facet_wrap(~ Signature, scales = "free_y", drop = TRUE) +
+  labs(x = "Time (years from 30)", y = NULL,
+       title = "Top 20 diseases per signature over time", 
+       fill = "Weight") +
+  scale_fill_viridis_c(option = "C", direction = -1) +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 8),
+        strip.text = element_text(size = 10),
+        axis.ticks.y = element_blank(),
+        panel.spacing = unit(0.5, "lines"))
+
+print(p2)
+
+
+```
 
 
 ```{r}
@@ -214,46 +272,6 @@ mean(results$auc_cox>results$auc_aladyn)
 
 
 
-library(survival)
-
-results <- data.frame()
-for(age in ages) {
-  for(d in 1:D) {
-    time_idx <- age - 29
-    
-    # Get predictions
-    aladyn_pred <- aladyn_risks[[as.character(age)]][,d]
-    cox_pred <- cox_risks[[as.character(age)]][,d]
-    
-    # Get survival times and events from time_idx onwards
-    valid_idx <- !is.na(cox_pred)
-    if(sum(valid_idx) > 0) {
-      # Calculate time-to-event or censoring from from_age
-      times <- model_data$event_times[valid_idx,d] - time_idx
-      events <- rowSums(Y[valid_idx,d,time_idx:T])
-      
-      # Calculate C-index
-      c_aladyn <- concordance(Surv(times, events) ~ aladyn_pred[valid_idx]+model_data$metadata$smoke[valid_idx]+model_data$metadata$sex[valid_idx])$concordance
-      c_cox <- concordance(Surv(times, events) ~ model_data$metadata$smoke[valid_idx]+model_data$metadata$sex[valid_idx])$concordance
-      
-      results <- rbind(results, data.frame(
-        age = age,
-        disease = d,
-        disease_name = disease_name_list[d],
-        c_aladyn = c_aladyn,
-        c_cox = c_cox,
-        n_at_risk = sum(valid_idx),
-        n_events = sum(events)
-      ))
-    }
-  }
-}
-
-r=melt(results[,c("age","disease_name","c_aladyn","c_cox")],id=c("age","disease_name"))
-groups=readRDS("~/Dropbox (Personal)/disease_groups.rds")
-r=merge(r,groups,by.x="disease_name",by.y="phenotype",all.x=TRUE)
-ggplot(r,aes(x=age,y=value,fill=variable))+geom_boxplot()+
-  scale_fill_futurama()+labs(y="AUC",x="Age",fill="Model")+theme_classic()+theme(axis.text.x = element_text(angle = 90))
 ```
 
 ### Now do it where we use the aladyn risks computed above as time varying predictors
@@ -385,9 +403,11 @@ for(age in ages) {
 
 
 # Calculate means and SDs
-sum <- results[,c("auc_basic","auc_aladyn","auc_combined")]
-means <- apply(sum,2,mean)
-sds <- apply(sum,2,sd)
+
+r=melt(results[,c("age","disease_name","auc_basic","auc_aladyn","auc_combined")],id=c("age","disease_name"))
+
+ggplot(r,aes(x=age,y=value,fill=variable))+geom_boxplot()+
+  scale_fill_futurama()+labs(y="AUC Across all Diseases of remaining risk",x="Age",fill="Model")+theme_classic()+theme(axis.text.x = element_text(angle = 90))
 
 # Create nicer plot
 barplot(means, 
@@ -407,45 +427,50 @@ text(seq(0.7,2.7,1), means+0.05,
 
 
 
-# Compare performance
 results2 <- data.frame()
 for(age in ages) {
-  for(d in 1:D) {
-    # Get predictions from all models
-    basic_pred <- all_risk_cs[[as.character(age)]][,d,1]
-    aladyn_pred <- all_risk_cs[[as.character(age)]][,d,2]
-    combined_pred <- all_risk_cs[[as.character(age)]][,d,3]
-    
-    # Get actual outcomes
-    time_idx <- age - 29
-    true_outcome <- rowSums(Y[,d,time_idx:T]) > 0
-    
-    # Calculate AUCs
-    valid_idx <- !is.na(basic_pred)
-    if(sum(valid_idx) > 0 && 
-       sum(true_outcome[valid_idx]) > 0 && 
-       sum(!true_outcome[valid_idx]) > 0) {
-      
-      auc_basic <-  basic_pred[valid_idx]
-      auc_aladyn <- aladyn_pred[valid_idx]
-      auc_combined <- combined_pred[valid_idx]
-      
-      results2 <- rbind(results2, data.frame(
-        age = age,
-        disease = d,
-        disease_name = disease_name_list[d],
-        auc_basic = auc_basic,
-        auc_aladyn = auc_aladyn,
-        auc_combined = auc_combined,
-        n_at_risk = sum(valid_idx),
-        n_events = sum(true_outcome[valid_idx])
-      ))
+    # Check if we have data for this age
+    if(!is.null(all_risk_cs[[as.character(age)]]) && 
+       !all(is.na(all_risk_cs[[as.character(age)]]))) {
+        
+        # Create temporary data frame for this age
+        temp_df <- data.frame(
+            age = rep(age, D),
+            disease = 1:D,
+            disease_name = disease_name_list
+        )
+        
+        # Add concordance scores
+        temp_df$c_basic <- all_risk_cs[[as.character(age)]][,1]
+        temp_df$c_aladyn <- all_risk_cs[[as.character(age)]][,2]
+        temp_df$c_combined <- all_risk_cs[[as.character(age)]][,3]
+        
+        # Append to results
+        results2 <- rbind(results2, temp_df)
     }
-  }
 }
 
 
-# Add legend
+# Calculate means and SDs
+sum <- results2[,c("c_basic","c_aladyn","c_combined")]
+means <- apply(sum,2,function(x){mean(na.omit(x))})
+sds <- apply(sum,2,function(x){sd(na.omit(x))})
+
+# Create nicer plot
+barplot(means, 
+        ylim=c(0,1.1),
+        col=c("lightgray","skyblue","lightgreen"),
+        names.arg=c("Basic\n(sex+smoke)", "Aladynoulli", "Combined"),
+      
+        ylab="Concordance Across all Diseases of remaining risk")
+
+# Add error bars
+arrows(seq(0.7,2.7,1), means-sds, seq(0.7,2.7,1), means+sds, 
+       code=3, angle=90, length=0.05)
+
+# Add numeric values
+text(seq(0.7,2.7,1), means+0.05, 
+     sprintf("%.3f", means))
 
 ```
 
@@ -523,3 +548,189 @@ for(age in ages) {
 
 # Find strongest associations
 top_pairs <- pairs_analysis[order(-pairs_analysis$risk_ratio),]
+
+```
+
+```{r}
+library(tidyverse)
+library(viridis)
+
+# Function 1: Topic-specific weight importance over other groups
+plot_group_deviations_within_topic <- function(l, groups, target_groups = c("circulatory system", "neoplasms", "neurological")) {
+  
+  # Calculate mean and std for each signature and time
+  topic_stats <- l %>%
+    group_by(Signature, Time) %>%
+    summarize(mean_weight = mean(value),
+             std_weight = sd(value),
+             .groups = 'drop')
+  
+  # Calculate deviations for each group
+  group_deviations <- map_df(target_groups, function(group) {
+    # Get diseases in this group
+    group_diseases <- groups %>%
+      filter(exclude_name == group) %>%
+      pull(phenotype)
+    
+    # Calculate group deviation
+    l %>%
+      filter(Disease %in% group_diseases) %>%
+      left_join(topic_stats, by = c("Signature", "Time")) %>%
+      group_by(Signature, Time) %>%
+      summarize(
+        deviation = mean((value - mean_weight) / std_weight),
+        group = group,
+        .groups = 'drop'
+      )
+  })
+  
+  # Plot
+  ggplot(group_deviations, aes(x = Time, y = deviation, color = factor(Signature))) +
+    geom_line(alpha = 0.7) +
+    facet_wrap(~group, ncol = 1, scales = "free_y") +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "black", alpha = 0.3) +
+     scale_color_npg() +
+    labs(x = "Time", y = "Deviation (σ)", color = "Signature",
+         title = "Group Deviation Within Topics") +
+    theme_minimal() +
+    theme(legend.position = "right")
+}
+
+# Function 2: Topic-specific group importance vs other topics
+plot_group_deviations_across_topics <- function(l, groups, target_groups = c("circulatory system", "neoplasms", "neurological")) {
+  
+  # Calculate deviations for each group
+  group_deviations <- map_df(target_groups, function(group) {
+    # Get diseases in this group
+    group_diseases <- groups %>%
+      filter(exclude_name == group) %>%
+      pull(phenotype)
+    
+    # Calculate mean weight across signatures for these diseases
+    signature_means <- l %>%
+      filter(Disease %in% group_diseases) %>%
+      group_by(Time, Disease) %>%
+      summarize(
+        mean_across_sigs = mean(value),
+        std_across_sigs = sd(value),
+        .groups = 'drop'
+      )
+    
+    # Calculate deviation from other signatures
+    l %>%
+      filter(Disease %in% group_diseases) %>%
+      left_join(signature_means, by = c("Time", "Disease")) %>%
+      group_by(Signature, Time) %>%
+      summarize(
+        deviation = mean((value - mean_across_sigs) / std_across_sigs),
+        group = group,
+        .groups = 'drop'
+      )
+  })
+  
+  # Plot
+  ggplot(group_deviations, aes(x = Time, y = deviation, color = factor(Signature))) +
+    geom_line(alpha = 0.7) +
+    facet_wrap(~group, ncol = 1, scales = "free_y") +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "black", alpha = 0.3) +
+    scale_color_npg() +
+    labs(x = "Time", y = "Deviation from mean across signatures (σ)", 
+         color = "Signature",
+         title = "Group Deviation Across Topics") +
+    theme_minimal() +
+    theme(legend.position = "right")
+}
+
+# Usage:
+p1 <- plot_group_deviations_within_topic(l, groups)
+p2 <- plot_group_deviations_across_topics(l, groups)
+
+# Display plots
+print(p1)
+print(p2)
+
+# Optional: Combine plots using patchwork
+library(patchwork)
+combined_plot <- p1 / p2
+print(combined_plot)
+
+ggsave(p1, filename = "group_deviationsz_within.pdf", width = 8, height = 6,dpi=300)
+ggsave(p2, filename = "group_deviationsz_between.pdf", width = 8, height = 6,dpi=300)
+```
+
+
+```{r}
+library(tidyverse)
+library(patchwork)
+theta_pred=theta
+plot_individual_analysis <- function(theta_pred, Y, G, disease_names, prs_names, 
+                                   individual_id=501, start_age=30) {
+  
+  # Convert data to long format for plotting
+  
+  # 1. Topic trajectories
+  topics_df <- theta_pred[individual_id,, ] %>% 
+    as.data.frame() %>%
+    mutate(Age = start_age:(start_age + ncol(.) - 1)) %>%
+    pivot_longer(-Age, 
+                names_to = "Topic", 
+                values_to = "Weight",
+                names_prefix = "V") # Adjust prefix based on your column names
+  
+  p1 <- ggplot(topics_df, aes(x = Age, y = Weight, color = Topic)) +
+    geom_line() +
+    labs(title = paste("Topic Trajectories for Individual", individual_id),
+         y = "Topic Weight") +
+    theme_minimal() +
+    theme(legend.position = "right")
+  
+  # 2. Disease events
+  cv_diseases <- c('Coronary atherosclerosis', 'Myocardial infarction', 
+                  'Angina pectoris', 'Cerebrovascular disease', 
+                  'Cerebral ischemia', 'Occlusion of cerebral arteries')
+  
+  disease_indices <- match(cv_diseases, disease_names)
+  
+  diseases_df <- Y[individual_id, disease_indices, ] %>%
+    as.data.frame() %>%
+    mutate(Age = start_age:(start_age + ncol(.) - 1)) %>%
+    pivot_longer(-Age, 
+                names_to = "Disease", 
+                values_to = "Status",
+                names_prefix = "V") %>%
+    mutate(Disease = cv_diseases[as.numeric(str_extract(Disease, "\\d+"))])
+  
+  p2 <- ggplot(diseases_df, aes(x = Age, y = Status, color = Disease)) +
+    geom_line() +
+    labs(title = "Disease Events",
+         y = "Disease Status") +
+    theme_minimal() +
+    theme(legend.position = "right")
+  
+  # 3. Genetic risk scores
+  genetic_df <- data.frame(
+    PRS = prs_names,
+    Value = G[individual_id,]
+  )
+  
+  p3 <- ggplot(genetic_df, aes(x = PRS, y = Value)) +
+    geom_col(fill = "steelblue") +
+    labs(title = "Genetic Risk Scores",
+         y = "PRS Value") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  # Combine plots
+  combined_plot <- p1 / p2 / p3 +
+    plot_layout(heights = c(2, 1, 1))
+  
+  # Print genetic values
+  cat("\nGenetic Risk Scores for Individual", individual_id, ":\n")
+  with(genetic_df, cat(paste(PRS, ": ", sprintf("%.3f", Value), "\n", sep="")))
+  
+  return(combined_plot)
+}
+
+# Usage:
+plot_individual_analysis(theta_pred, Y, G, disease_names_list, prs_names_list)
+```
