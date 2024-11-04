@@ -92,6 +92,9 @@ calc_remaining_risk <- function(pi_pred, from_age) {
 ages <- seq(30, 75, by=5)
 aladyn_risks <- list()
 
+
+# Calculate remaining risk at different ages
+
 for(age in ages) {
   time_idx <- age - 29  # Convert age to time index
   aladyn_risks[[as.character(age)]] <- calc_remaining_risk(model_data$pi_pred, time_idx)
@@ -124,7 +127,7 @@ fit_cox_risk <- function(event_times, event, sex, smoke, from_age) {
     df_risk <- df[at_risk_idx,]
     df_risk$time <- df_risk$time - from_age
     
-    # Fit Cox and get risks for at-risk people
+    # Fit Cox and get risks for at-risk people at a given time (i.e., time varying covariate predictions conditional on risk free age)
     cox_fit <- coxph(Surv(time, event) ~ sex + smoke, data=df_risk)
     at_risk_risks <- 1 - exp(-predict(cox_fit, type="expected"))
     
@@ -197,22 +200,84 @@ for(age in ages) {
   }
 }
 
+r=melt(results[,c("age","disease_name","auc_aladyn","auc_cox")],id=c("age","disease_name"))
+groups=readRDS("~/Dropbox (Personal)/disease_groups.rds")
+r=merge(r,groups,by.x="disease_name",by.y="phenotype",all.x=TRUE)
+ggplot(r,aes(x=age,y=value,fill=variable))+geom_boxplot()+
+  scale_fill_futurama()+labs(y="AUC",x="Age",fill="Model")+theme_classic()+theme(axis.text.x = element_text(angle = 90))
 
 print(head(results[order(results$auc_aladyn,decreasing = T),]))
 
 mean(results$auc_cox>results$auc_aladyn)
 
+#saveRDS(results,"~/Dropbox (Personal)/results_without_cox_correction.rds")
+
+
+
+library(survival)
+
+results <- data.frame()
+for(age in ages) {
+  for(d in 1:D) {
+    time_idx <- age - 29
+    
+    # Get predictions
+    aladyn_pred <- aladyn_risks[[as.character(age)]][,d]
+    cox_pred <- cox_risks[[as.character(age)]][,d]
+    
+    # Get survival times and events from time_idx onwards
+    valid_idx <- !is.na(cox_pred)
+    if(sum(valid_idx) > 0) {
+      # Calculate time-to-event or censoring from from_age
+      times <- model_data$event_times[valid_idx,d] - time_idx
+      events <- rowSums(Y[valid_idx,d,time_idx:T])
+      
+      # Calculate C-index
+      c_aladyn <- concordance(Surv(times, events) ~ aladyn_pred[valid_idx]+model_data$metadata$smoke[valid_idx]+model_data$metadata$sex[valid_idx])$concordance
+      c_cox <- concordance(Surv(times, events) ~ model_data$metadata$smoke[valid_idx]+model_data$metadata$sex[valid_idx])$concordance
+      
+      results <- rbind(results, data.frame(
+        age = age,
+        disease = d,
+        disease_name = disease_name_list[d],
+        c_aladyn = c_aladyn,
+        c_cox = c_cox,
+        n_at_risk = sum(valid_idx),
+        n_events = sum(events)
+      ))
+    }
+  }
+}
+
+r=melt(results[,c("age","disease_name","c_aladyn","c_cox")],id=c("age","disease_name"))
+groups=readRDS("~/Dropbox (Personal)/disease_groups.rds")
+r=merge(r,groups,by.x="disease_name",by.y="phenotype",all.x=TRUE)
+ggplot(r,aes(x=age,y=value,fill=variable))+geom_boxplot()+
+  scale_fill_futurama()+labs(y="AUC",x="Age",fill="Model")+theme_classic()+theme(axis.text.x = element_text(angle = 90))
 ```
+
+### Now do it where we use the aladyn risks computed above as time varying predictors
 
 
 ```{r}
 # Function to fit Cox models and get predicted risks
-fit_cox_models <- function(event_times, event, sex, smoke, aladyn_pred, from_age) {
+fit_cox_models <- function(event_times,
+                          event,
+                          sex,
+                          smoke,
+                          aladyn_pred,
+                          from_age) {
   N <- length(event_times)
   all_risks <- data.frame(
     cox_basic = rep(NA, N),
     cox_aladyn = rep(NA, N),
     cox_combined = rep(NA, N)
+  )
+  
+  all_cs <- data.frame(
+    cox_basic = NA,    # Changed: Single value per model
+    cox_aladyn = NA,
+    cox_combined = NA
   )
   
   # Create survival data
@@ -228,29 +293,39 @@ fit_cox_models <- function(event_times, event, sex, smoke, aladyn_pred, from_age
   # Get indices of people still at risk
   at_risk_idx <- which(df$time > from_age)
   
-  if(length(at_risk_idx) > 0) {
-    df_risk <- df[at_risk_idx,]
+  if (length(at_risk_idx) > 0) {
+    df_risk <- df[at_risk_idx, ]
     df_risk$time <- df_risk$time - from_age
     
-    # Fit three models
-    cox_basic <- coxph(Surv(time, event) ~ sex + smoke, data=df_risk)
-    cox_aladyn <- coxph(Surv(time, event) ~ aladyn_pred, data=df_risk)
-    cox_combined <- coxph(Surv(time, event) ~ sex + smoke + aladyn_pred, data=df_risk)
-    
-    # Get risks for each model
-    all_risks$cox_basic[at_risk_idx] <- 1 - exp(-predict(cox_basic, type="expected"))
-    all_risks$cox_aladyn[at_risk_idx] <- 1 - exp(-predict(cox_aladyn, type="expected"))
-    all_risks$cox_combined[at_risk_idx] <- 1 - exp(-predict(cox_combined, type="expected"))
+    # Fit models and get predictions only if we have enough data
+    if(sum(df_risk$event) > 0) {  # Added check for events
+      # Fit three models
+      cox_basic <- coxph(Surv(time, event) ~ sex + smoke, data = df_risk)
+      cox_aladyn <- coxph(Surv(time, event) ~ aladyn_pred, data = df_risk)
+      cox_combined <- coxph(Surv(time, event) ~ sex + smoke + aladyn_pred, data = df_risk)
+      
+      # Get risks
+      all_risks$cox_basic[at_risk_idx] <- 1 - exp(-predict(cox_basic, type = "expected"))
+      all_risks$cox_aladyn[at_risk_idx] <- 1 - exp(-predict(cox_aladyn, type = "expected"))
+      all_risks$cox_combined[at_risk_idx] <- 1 - exp(-predict(cox_combined, type = "expected"))
+      
+      # Store concordance
+      all_cs$cox_basic <- cox_basic$concordance["concordance"]
+      all_cs$cox_aladyn <- cox_aladyn$concordance["concordance"]
+      all_cs$cox_combined <- cox_combined$concordance["concordance"]
+    }
   }
   
-  return(all_risks)
+  return(list("all_risks" = all_risks, "all_cs" = all_cs))
 }
 
 # Calculate risks for all models at each age
 all_risks <- list()
+all_risk_cs <- list()
 for(age in ages) {
   time_idx <- age - 29
   all_risks[[as.character(age)]] <- array(NA, dim=c(N, D, 3))  # 3 models
+  all_risk_cs[[as.character(age)]] <- array(NA, dim=c(D, 3))   # Changed: One value per disease/model
   
   for(d in 1:D) {
     risks <- fit_cox_models(
@@ -262,9 +337,12 @@ for(age in ages) {
       from_age = time_idx
     )
     
-    all_risks[[as.character(age)]][,d,] <- as.matrix(risks)
+    all_risks[[as.character(age)]][,d,] <- as.matrix(risks$all_risks)
+    all_risk_cs[[as.character(age)]][d,] <- as.numeric(risks$all_cs)  # Changed: Store concordance correctly
   }
 }
+
+
 
 # Compare performance
 results <- data.frame()
@@ -304,6 +382,8 @@ for(age in ages) {
 }
 
 
+
+
 # Calculate means and SDs
 sum <- results[,c("auc_basic","auc_aladyn","auc_combined")]
 means <- apply(sum,2,mean)
@@ -325,11 +405,48 @@ arrows(seq(0.7,2.7,1), means-sds, seq(0.7,2.7,1), means+sds,
 text(seq(0.7,2.7,1), means+0.05, 
      sprintf("%.3f", means))
 
+
+
+# Compare performance
+results2 <- data.frame()
+for(age in ages) {
+  for(d in 1:D) {
+    # Get predictions from all models
+    basic_pred <- all_risk_cs[[as.character(age)]][,d,1]
+    aladyn_pred <- all_risk_cs[[as.character(age)]][,d,2]
+    combined_pred <- all_risk_cs[[as.character(age)]][,d,3]
+    
+    # Get actual outcomes
+    time_idx <- age - 29
+    true_outcome <- rowSums(Y[,d,time_idx:T]) > 0
+    
+    # Calculate AUCs
+    valid_idx <- !is.na(basic_pred)
+    if(sum(valid_idx) > 0 && 
+       sum(true_outcome[valid_idx]) > 0 && 
+       sum(!true_outcome[valid_idx]) > 0) {
+      
+      auc_basic <-  basic_pred[valid_idx]
+      auc_aladyn <- aladyn_pred[valid_idx]
+      auc_combined <- combined_pred[valid_idx]
+      
+      results2 <- rbind(results2, data.frame(
+        age = age,
+        disease = d,
+        disease_name = disease_name_list[d],
+        auc_basic = auc_basic,
+        auc_aladyn = auc_aladyn,
+        auc_combined = auc_combined,
+        n_at_risk = sum(valid_idx),
+        n_events = sum(true_outcome[valid_idx])
+      ))
+    }
+  }
+}
+
+
 # Add legend
-legend("bottomleft", 
-       c(paste("n diseases = 348"),
-         paste("mean number at risk=", round(mean(results$n_at_risk),1)),
-       bty="n"))
+
 ```
 
 
