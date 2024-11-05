@@ -1194,4 +1194,642 @@ do.call(grid.arrange, c(result$plots, ncol=3))
 ggsave("topic_probabilities.pdf", marrangeGrob(grobs=result$plots, ncol=3, nrow=3),
        width=40, height=30, dpi=600)
 ```
+
+
+```{r}
+library(tidyverse)
+library(pheatmap)
+library(viridis)
+
+
+
+plot_group_transitions <- function(Y, pi_pred, disease_names, groups, age_bins = seq(30, 80, 10)) {
+  
+  # Filter out unwanted groups
+  exclude_groups <- c("infectious diseases", "injuries & poisonings", "", "symptoms","congenital anomalies")
+  key_groups <- unique(groups$exclude_name[!groups$exclude_name %in% exclude_groups])
+  
+  # Create group dictionary
+  group_dict <- map(key_groups, function(group) {
+    which(disease_names %in% groups$phenotype[groups$exclude_name == group])
+  })
+  names(group_dict) <- key_groups
+  
+
+  # For each age window
+  for(i in 2:(length(age_bins)-1)) {
+    age_start <- age_bins[i] - 30
+    age_end <- age_bins[i+1] - 30
+    
+    # Initialize matrices
+    marginal_probs <- numeric(length(key_groups))
+    conditional_matrix <- matrix(0, nrow = length(key_groups), ncol = length(key_groups))
+    ratio_matrix <- matrix(0, nrow = length(key_groups), ncol = length(key_groups))
+    counts_matrix <- matrix(0, nrow = length(key_groups), ncol = length(key_groups))
+    
+    names(marginal_probs) <- key_groups
+    rownames(conditional_matrix) <- colnames(conditional_matrix) <- key_groups
+    rownames(ratio_matrix) <- colnames(ratio_matrix) <- key_groups
+    
+    # Calculate marginal probabilities
+    for(idx1 in 1:length(key_groups)) {
+      group1 <- key_groups[idx1]
+      diseases1 <- group_dict[[group1]]
+      
+      at_risk <- which(rowSums(Y[, diseases1, 1:age_start]) == 0)
+      
+      if(length(at_risk) >= 100) {
+        group_risk <- rep(0, length(at_risk))
+        for(d in diseases1) {
+          # Extract probabilities for this disease
+          yearly_pi <- pi_pred[at_risk, d, (age_start+1):age_end]
+          # Calculate cumulative risk
+          if(length(dim(yearly_pi)) == 2) {
+            disease_risk <- 1 - apply(1 - yearly_pi, 1, prod)
+          } else {
+            disease_risk <- 1 - prod(1 - yearly_pi)
+          }
+          group_risk <- pmax(group_risk, disease_risk)
+        }
+        marginal_probs[idx1] <- mean(group_risk)
+      }
+    }
+    
+    # Calculate conditional probabilities
+    for(idx1 in 1:length(key_groups)) {
+      for(idx2 in 1:length(key_groups)) {
+        if(idx1 != idx2) {
+          group1 <- key_groups[idx1]
+          group2 <- key_groups[idx2]
+          
+          diseases1 <- group_dict[[group1]]
+          diseases2 <- group_dict[[group2]]
+          
+          at_risk <- which(rowSums(Y[, diseases1, 1:age_start]) == 0)
+          
+          if(age_start > 0) {
+            had_prev <- which(rowSums(Y[, diseases2, 1:age_start]) > 0)
+            mask <- intersect(at_risk, had_prev)
+            counts_matrix[idx1, idx2] <- length(mask)
+            
+            if(length(mask) >= 100) {
+              group_risk_cond <- rep(0, length(mask))
+              for(d in diseases1) {
+                # Extract probabilities for this disease
+                yearly_pi <- pi_pred[mask, d, (age_start+1):age_end]
+                # Calculate cumulative risk
+                if(length(dim(yearly_pi)) == 2) {
+                  disease_risk <- 1 - apply(1 - yearly_pi, 1, prod)
+                } else {
+                  disease_risk <- 1 - prod(1 - yearly_pi)
+                }
+                group_risk_cond <- pmax(group_risk_cond, disease_risk)
+              }
+              conditional_matrix[idx1, idx2] <- mean(group_risk_cond)
+              
+              if(marginal_probs[idx1] > 0) {
+                ratio_matrix[idx1, idx2] <- conditional_matrix[idx1, idx2] / marginal_probs[idx1]
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    
+    
+    
+    # Create plots
+    # 1. Marginal probabilities bar plot
+    p1 <- ggplot(data.frame(Group = names(marginal_probs), 
+                           Probability = marginal_probs)) +
+      geom_col(aes(x = reorder(Group, Probability), y = Probability,fill=Group)) +
+      coord_flip() +
+      labs(title = sprintf("Marginal Risk by Group\nAge %d-%d", age_bins[i], age_bins[i+1]),
+           x = "Disease Group", y = "Risk") +
+      theme_minimal()
+    
+    # 2. Conditional probabilities heatmap
+  # Ensure unique breaks
+  max_cond <- max(conditional_matrix, na.rm = TRUE)
+  breaks_cond <- unique(seq(0, max_cond * 1.1, length.out = 100))
+  if(length(breaks_cond) < 2) breaks_cond <- c(0, max_cond * 1.1)
+  
+  p2 <- pheatmap(conditional_matrix,
+                 main = sprintf("Conditional Risks\nAge %d-%d", age_bins[i], age_bins[i+1]),
+                 color = viridis(length(breaks_cond) - 1, option ="H" ),
+                 breaks = breaks_cond,
+                 display_numbers = TRUE,
+                 number_format = "%.3f",
+                 cluster_rows = FALSE,
+                 cluster_cols = FALSE)
+    
+
+    return(list(
+      marginal = marginal_probs,
+      conditional = conditional_matrix,
+     
+      counts = counts_matrix,
+      plots = list(marginal = p1, conditional = p2)
+    ))
+  }
+}
+
+# Usage:
+results <- plot_group_transitions(Y, pi_pred, disease_names_list, groups)
+
+# Display plots
+grid.arrange(
+  results$plots$marginal,
+  grid.grabExpr(grid.draw(results$plots$conditional$gtable)),
+  grid.grabExpr(grid.draw(results$plots$ratio$gtable)),
+  ncol = 3
+)
+
+results <- plot_group_transitions(Y, pi_pred, disease_names_list, groups)
+
+```
+
+```{r}
+analyze_signature_transitions <- function(theta, threshold = 0.2) {
+  # theta dimensions: [n_people, n_signatures, n_times]
+  n_people <- dim(theta)[1]
+  n_signatures <- dim(theta)[2]
+  n_times <- dim(theta)[3]
+  
+  # Create plot layout
+  par(mfrow = c(2,2))
+  
+  # 1. Average signature strengths over time
+  mean_theta <- apply(theta, c(2,3), mean)  # Average across people
+  matplot(1:n_times, t(mean_theta), type = "l", 
+          main = "Average Signature Strengths Over Time",
+          xlab = "Time", ylab = "Average θ")
+  legend("topright", legend = paste("Signature", 0:(n_signatures-1)), 
+         col = 1:n_signatures, lty = 1)
+  
+  # 2. Calculate transition matrix
+  transitions <- matrix(0, n_signatures, n_signatures)
+  
+  for(person in 1:n_people) {
+    for(t in 1:(n_times-1)) {
+      # Get dominant signatures (above threshold)
+      current <- which(theta[person, , t] > threshold)
+      next_t <- which(theta[person, , t+1] > threshold)
+      
+      # Record transitions
+      if(length(current) > 0 && length(next_t) > 0) {
+        for(i in current) {
+          for(j in next_t) {
+            transitions[j, i] <- transitions[j, i] + 1
+          }
+        }
+      }
+    }
+  }
+  
+  # Normalize by row sums (probability of transitioning TO each signature)
+  transitions_norm <- sweep(transitions, 2, colSums(transitions) + 1e-10, "/")
+  
+  # Plot transition heatmap
+  library(pheatmap)
+  pheatmap(transitions,
+           main = "Signature Transition Probabilities",
+           display_numbers = TRUE,
+           number_format = "%.2f",
+           cluster_rows = FALSE,
+           cluster_cols = FALSE,
+           labels_row = paste("Sig", 0:(n_signatures-1)),
+           labels_col = paste("Sig", 0:(n_signatures-1)))
+  
+  # 3. Example individual trajectories
+  # Find people with most signature switches
+  n_switches <- numeric(n_people)
+  for(person in 1:n_people) {
+    dominant_sigs <- apply(theta[person, , ], 2, which.max)
+    n_switches[person] <- sum(diff(dominant_sigs) != 0)
+  }
+  
+  interesting_people <- order(n_switches, decreasing = TRUE)[1:5]
+  m=melt(theta[interesting_people, , ], varnames = c("Person", "Signature", "Time"))
+  ggplot(m,aes(x=Time,y=value,fill=as.factor(Signature)))+scale_fill_simpsons()+
+    geom_area()+
+    facet_wrap(~Person)+
+    labs(title="Example Individual Signature Trajectories\n(Top signature switchers)",
+         x="Time",y="θ",fill="Signature")
+  # Plot trajectories for interesting people
+  matplot(1:n_times, t(theta[interesting_people[1], , ]), type = "l",
+          main = "Example Individual Signature Trajectories\n(Top signature switchers)",
+          xlab = "Time", ylab = "θ")
+  
+  return(transitions_norm)
+}
+
+# Usage:
+transitions <- analyze_signature_transitions(theta)
+```
+
+
+```{r}
+find_and_plot_exemplar_cases <- function(model, Y, G, disease_names_list, prs_names_list, n_cases=20) {
+  K <- 10  # Number of topics
+  
+  # PRS to phenotype mapping
+  prs_to_phenotype <- list(
+    "AMD" = "Macular degeneration (senile) of retina NOS",
+    "AD" = "Alzheimer's disease",
+    "AST" = "Asthma",
+    "AF" = "Atrial fibrillation",
+    "BD" = "Bipolar",
+    "BMI" = "Overweight, obesity and other hyperalimentation",
+    "CRC" = "Colorectal cancer",
+    "BC" = "Malignant neoplasm of female breast",
+    "CED" = "Celiac disease",
+    "CAD" = "Coronary atherosclerosis",
+    "EOC" = "Malignant neoplasm of ovary",
+    "T1D" = "Type 1 diabetes",
+    "T2D" = "Type 2 diabetes",
+    "UC" = "Ulcerative colitis",
+    "VTE" = "Other venous embolism and thrombosis",
+    "RA" = "Rheumatoid arthritis",
+    "SLE" = "Systemic lupus erythematosus",
+    "SCZ" = "Schizophrenia",
+    "MS" = "Multiple sclerosis",
+    "PD" = "Parkinson's disease"
+  )
+  
+  # Get model parameters
+  theta_np <- theta_pred  # Assuming these are already in R format
+  gamma_np <- model_data$gamma
+  
+  # Calculate genetic contributions for each person
+  genetic_contributions <- G %*% gamma_np  # N x K
+  
+  # Calculate disease burden
+  disease_burden <- apply(Y, 1, sum)
+  
+  # Find individuals with many diseases and strong genetic alignment
+  scores <- list()
+  for(i in 1:dim(Y)[1]) {
+    # Get their dominant topic
+    dominant_topic <- which.max(colMeans(theta_np[i,,]))
+    if(dominant_topic > K) dominant_topic <- K  # Safety check
+    
+    # Score based on genetic prediction and disease burden
+    genetic_score <- genetic_contributions[i, dominant_topic]
+    score <- genetic_score * disease_burden[i]
+    scores[[i]] <- c(i, score)
+  }
+  
+  # Get top cases
+  scores_mat <- do.call(rbind, scores)
+  top_cases <- scores_mat[order(scores_mat[,2], decreasing=TRUE)[1:n_cases],]
+  
+  # Plot each case
+  for(case in 1:nrow(top_cases)) {
+    idx <- top_cases[case,1]
+    score <- top_cases[case,2]
+    
+    cat(sprintf("\nAnalyzing Individual %d\n", idx))
+    
+    # Set up plotting area
+    par(mfrow=c(3,1), mar=c(4,10,4,2))
+    
+    # 1. Disease timeline
+    disease_events <- list()
+    for(d_idx in 1:dim(Y)[2]) {
+      events <- which(Y[idx,d_idx,] == 1)
+      if(length(events) > 0) {
+        disease_name <- disease_names_list[d_idx]
+        is_prs_disease <- disease_name %in% unlist(prs_to_phenotype)
+        disease_events[[length(disease_events) + 1]] <- list(
+          disease = disease_name,
+          events = events + 30,
+          is_prs_disease = is_prs_disease
+        )
+      }
+    }
+    
+    # Sort by first occurrence
+    first_events <- sapply(disease_events, function(x) min(x$events))
+    disease_events <- disease_events[order(first_events)]
+    
+    # Plot disease timeline
+    plot(NULL, xlim=c(30, 30+dim(Y)[3]), ylim=c(0, length(disease_events)),
+         ylab="", xlab="Age", main="Disease Timeline (* = Has PRS)")
+    
+    for(i in 1:length(disease_events)) {
+      d <- disease_events[[i]]
+      points(d$events, rep(i, length(d$events)), 
+             col=ifelse(d$is_prs_disease, "red", "blue"),
+             pch=19, cex=1)
+    }
+    
+    # Add disease labels
+    disease_labels <- sapply(disease_events, function(x) 
+    paste0(substr(x$disease, 1, 50), ifelse(x$is_prs_disease, "*", "")))
+    axis(2, at=1:length(disease_events), labels=disease_labels, las=2)
+    grid(nx=NULL, ny=NA)
+    
+    # 2. Topic trajectories
+    matplot(30:(30+dim(Y)[3]-1), t(theta_np[idx,,]), type="l", lty=1,
+            main=paste0("Topic Trajectories for",idx), xlab="Age", ylab="Topic Weight",col=1:K)
+    legend("topright", legend=paste("Topic", 1:K), col=1:K, lty=1)
+    grid()
+    
+    # 3. Genetic contributions
+    individual_genetics <- G[idx,]
+    topic_contributions <- individual_genetics %*% gamma_np
+    barplot(topic_contributions, main="Genetic Contributions to Topics",
+            xlab="Topic", ylab="Genetic Contribution")
+    grid()
+    
+    # Print matching PRS and phenotypes
+    cat("\nMatching PRS and phenotypes:\n")
+    for(prs in names(prs_to_phenotype)) {
+      phenotype <- prs_to_phenotype[[prs]]
+      if(any(sapply(disease_events, function(x) x$disease == phenotype))) {
+        prs_value <- individual_genetics[which(prs_names_list == prs)]
+        cat(sprintf("%s (value: %.3f) -> %s\n", 
+                   prs, prs_value, phenotype))
+      }
+    }
+  }
+}
+
+# Usage:
+find_and_plot_exemplar_cases(model, Y, G, disease_names_list, prs_names)
+```
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+library(viridis)
+
+analyze_patient <- function(idx, Y, G, theta_pred, gamma_np, disease_names_list, 
+                          prs_names_list, prs_to_phenotype, K=10) {
+  
+  # Create consistent colors for topics
+  topic_colors <- scales::hue_pal()(K)
+  
+  # Helper function to create timeline data
+  create_timeline_data <- function(Y, idx, disease_names_list) {
+    timeline_data <- data.frame()
+    
+    for(d_idx in 1:dim(Y)[2]) {
+      events <- which(Y[idx, d_idx,] == 1)
+      if(length(events) > 0) {
+        disease_name <- disease_names_list[d_idx]
+        is_prs_disease <- disease_name %in% unlist(prs_to_phenotype)
+        
+        timeline_data <- rbind(timeline_data, 
+                             data.frame(
+                               disease = disease_name,
+                               age = events + 30,
+                               is_prs = is_prs_disease
+                             ))
+      }
+    }
+    
+    # Sort by first occurrence
+    timeline_data <- timeline_data %>%
+      group_by(disease) %>%
+      arrange(age) %>%
+      ungroup()
+    
+    return(timeline_data)
+  }
+  
+  # Create all visualizations
+  timeline_data <- create_timeline_data(Y, idx, disease_names_list)
+  
+  # 1. Disease Timeline Plot
+  timeline_plot <- ggplot(timeline_data, aes(x = age, y = reorder(disease, age))) +
+    geom_point(aes(color = is_prs), size = 3) +
+    scale_color_manual(values = c("FALSE" = "#2C3E50", "TRUE" = "#E74C3C"),
+                      labels = c("No PRS", "Has PRS")) +
+    theme_minimal() +
+    theme(
+      axis.text.y = element_text(size = 8),
+      panel.grid.major.y = element_line(color = "gray90"),
+      legend.position = "top"
+    ) +
+    labs(
+      title = "Disease Timeline",
+      x = "Age",
+      y = NULL,
+      color = "PRS Status"
+    )
+  
+  # 2. Topic Trajectories Plot
+  trajectory_data <- as.data.frame(t(theta_pred[idx,,]))
+  trajectory_data$age <- 30:(30+dim(Y)[3]-1)
+  trajectory_data_long <- trajectory_data %>%
+    pivot_longer(-age, names_to = "topic", values_to = "weight") %>%
+    mutate(topic = factor(topic))
+  
+  trajectory_plot <- ggplot(trajectory_data_long, 
+                          aes(x = age, y = weight, color = topic)) +
+    geom_line(size = 1) +
+    scale_color_manual(values = topic_colors) +
+    theme_minimal() +
+    theme(legend.position = "right") +
+    labs(
+      title = paste("Topic Trajectories for Individual", idx),
+      x = "Age",
+      y = "Topic Weight",
+      color = "Topic"
+    )
+  
+  # 3. Genetic Contributions Plot
+  genetic_data <- data.frame(
+    topic = factor(1:K),
+    contribution = as.vector(G[idx,] %*% gamma_np)
+  )
+  
+  genetic_plot <- ggplot(genetic_data, aes(x = topic, y = contribution)) +
+    geom_col(aes(fill = topic)) +
+    scale_fill_manual(values = topic_colors) +
+    theme_minimal() +
+    theme(legend.position = "none") +
+    labs(
+      title = "Genetic Contributions to Topics",
+      x = "Topic",
+      y = "Contribution"
+    )
+  
+  # Print matching PRS and phenotypes
+  print_prs_matches <- function() {
+    cat("\nPRS-Phenotype Matches for Individual", idx, "\n")
+    cat(rep("-", 50), "\n")
+    
+    matches <- data.frame()
+    for(prs in names(prs_to_phenotype)) {
+      phenotype <- prs_to_phenotype[[prs]]
+      if(phenotype %in% timeline_data$disease) {
+        prs_value <- G[idx, which(prs_names_list == prs)]
+        matches <- rbind(matches, 
+                        data.frame(
+                          PRS = prs,
+                          Value = round(prs_value, 3),
+                          Phenotype = phenotype
+                        ))
+      }
+    }
+    
+    if(nrow(matches) > 0) {
+      print(matches, row.names = FALSE)
+    } else {
+      cat("No matching PRS-phenotype pairs found.\n")
+    }
+  }
+  
+  # Calculate disease burden and genetic score
+  disease_burden <- sum(Y[idx,,])
+  genetic_score <- max(rowMeans(theta_pred[idx,,]))  # Fixed to rowMeans
+  
+  # Print summary statistics
+  cat("\nSummary Statistics for Individual", idx, "\n")
+  cat(rep("-", 50), "\n")
+  cat(sprintf("Disease Burden: %d conditions\n", disease_burden))
+  cat(sprintf("Maximum Topic Weight: %.3f\n", genetic_score))
+  
+  # Arrange and display plots
+  grid.arrange(
+    timeline_plot, 
+    trajectory_plot,
+    genetic_plot,
+    ncol = 1,
+    heights = c(1.5, 1, 1)
+  )
+  
+  # Print PRS matches
+  print_prs_matches()
+}
+
+# Function to find and analyze top cases
+analyze_top_cases <- function(Y, G, theta_pred, gamma_np, disease_names_list, 
+                            prs_names_list, prs_to_phenotype, n_cases = 5) {
+  
+  # Calculate scores
+  disease_burden <- apply(Y, 1, sum)
+  genetic_contributions <- G %*% gamma_np
+  scores <- numeric(dim(Y)[1])
+  
+  for(i in 1:dim(Y)[1]) {
+    dominant_topic <- which.max(rowMeans(theta_pred[i,,]))  # Fixed to rowMeans
+    genetic_score <- genetic_contributions[i, dominant_topic]
+    scores[i] <- genetic_score * disease_burden[i]
+  }
+  
+  # Get top cases
+  top_indices <- order(scores, decreasing = TRUE)[1:n_cases]
+  
+  # Analyze each top case
+  for(idx in top_indices) {
+    cat("\n\nAnalyzing Individual", idx, "(Score:", round(scores[idx], 2), ")\n")
+    cat(rep("=", 70), "\n")
+    
+    analyze_patient(idx, Y, G, theta_pred, gamma_np, disease_names_list,
+                   prs_names_list, prs_to_phenotype)
+    
+    cat("\nPress [Enter] to continue...\n")
+    readline()
+  }
+}
+
+# Analyze top 5 cases
+analyze_top_cases(Y, G, theta_pred, gamma_np, disease_names_list, 
+                 prs_names, prs_to_phenotype, n_cases = 5)
+
+# Or analyze a specific patient
+analyze_patient(1, Y, G, theta_pred, gamma_np, disease_names_list,
+               prs_names, prs_to_phenotype)
+```
+
+
+```{r}
+ analyze_prediction_timing <- function(Y, pi_pred, window_size=5) {
+  N <- dim(Y)[1]
+  D <- dim(Y)[2]
+  T <- dim(Y)[3]
+  
+  # Store predictions before events
+  pre_event_preds <- list()
+  control_preds <- list()
+  
+  for(d in 1:D) {
+    for(i in 1:N) {
+      # Find first event for this person and disease
+      event_time <- which(Y[i,d,] == 1)[1]
+      
+      if(!is.na(event_time) && event_time > window_size) {
+        # Get predictions leading up to event
+        pre_event_window <- (event_time-window_size):(event_time-1)
+        pre_event_preds[[length(pre_event_preds) + 1]] <- 
+          pi_pred[i,d,pre_event_window]
+        
+        # Get matched control period from someone without the event
+        control_ids <- which(apply(Y[,d,], 1, sum) == 0)
+        if(length(control_ids) > 0) {
+          control_id <- sample(control_ids, 1)
+          control_preds[[length(control_preds) + 1]] <- 
+            pi_pred[control_id,d,pre_event_window]
+        }
+      }
+    }
+  }
+  
+  # Convert lists to vectors
+  pre_event_preds <- unlist(pre_event_preds)
+  control_preds <- unlist(control_preds)
+  
+  # Plot
+  par(mfrow=c(2,1))
+  
+  # 1. Distribution comparison
+  plot(density(pre_event_preds), 
+       main="Predictions Before Events vs Controls",
+       xlab="Predicted Probability",
+       col="red")
+  lines(density(control_preds), col="blue")
+  legend("topright", 
+         legend=c("Pre-Event", "Controls"),
+         col=c("red", "blue"),
+         lty=1)
+  
+  # 2. Time-to-event analysis
+  boxplot(split(pre_event_preds, 
+                rep(window_size:1, length(pre_event_preds)/window_size)),
+          main="Predictions Leading up to Events",
+          xlab="Time to Event",
+          ylab="Predicted Probability")
+  
+  # Statistical tests
+  # 1. Compare pre-event vs control predictions
+  wilcox_test <- wilcox.test(pre_event_preds, control_preds)
+  
+  # 2. Test for trend in pre-event predictions
+  time_to_event <- rep(window_size:1, length(pre_event_preds)/window_size)
+  trend_test <- cor.test(time_to_event, pre_event_preds, method="spearman")
+  
+  # Print results
+  cat("\nStatistical Tests:\n")
+  cat("-----------------\n")
+  cat("Pre-event vs Control Wilcoxon test:\n")
+  cat(sprintf("  p-value: %.4e\n", wilcox_test$p.value))
+  cat("\nTrend analysis (Spearman correlation):\n")
+  cat(sprintf("  rho: %.4f\n", trend_test$estimate))
+  cat(sprintf("  p-value: %.4e\n", trend_test$p.value))
+  
+  return(list(
+    pre_event_preds = pre_event_preds,
+    control_preds = control_preds,
+    wilcox_test = wilcox_test,
+    trend_test = trend_test
+  ))
+ }
 ```

@@ -257,7 +257,9 @@ class AladynSurvivalModel(nn.Module):
                 print(f"Mean condition number: {history['condition_number'][-1]:.2f}")
         
         return history
-
+    
+    
+## plotting code from here down
 def plot_training_diagnostics(history):
     """Plot training diagnostics"""
     fig, axes = plt.subplots(2, 2, figsize=(15, 12))
