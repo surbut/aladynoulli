@@ -119,6 +119,7 @@ generate_tensor_data <- function(N = 1000, D = 5, T = 50, K = 3, num_covariates 
     phi_kd = phi_kd,
     Gamma_k = Gamma_k,
     pi = pi_values,
+    pi_temp=pi_temp,
     theta = theta,
     eta = eta
   ))
