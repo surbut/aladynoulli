@@ -27,18 +27,21 @@ py_config()  # Should show your new environment
 # Load the saved model data
 model_data <- py_load_object("~/Dropbox (Personal)//aladyn_model_full.pkl")
 lambda=model_data$lambda
+model_data$metadata$smoke=ifelse(model_data$metadata$smoke==1,1,0)
 phi=model_data$phi
 Y=model_data$Y
 event_times=model_data$event_times
 disease_names=model_data$disease_names
+groups=model_data$groups
 ```
 
 ```{r}
 library(reshape2)
 theta=aperm(apply(lambda,c(1,3),function(x){exp(x)/sum(exp(x))}),c(2,1,3))
+G=readRDS("~/tensornoulli_ehr_new/data/prs.rds")
 l=melt(theta)
 colnames(l)=c("Individual","Signature","Time","value")
-p=ggplot(l[l$Individual%in%sample(1:9661,5),],aes(Time,value,fill=as.factor(Signature)))+geom_area()+facet_wrap(~Individual)+scale_fill_futurama()+labs(x="Time (years from 30)",y="Probability",title="Signature probabilities over time",fill="Signature")
+p=ggplot(l[l$Individual%in%sample(1:9661,5),],aes(Time,value,fill=as.factor(Signature)))+geom_area()+facet_wrap(~Individual,scales = "free")+scale_fill_futurama()+labs(x="Time (years from 30)",y="Probability",title="Signature probabilities over time",fill="Signature")
 
 
 ggsave(p, filename = "signature_probabilities_indvidiaul.pdf", width = 6, height = 4)
@@ -51,7 +54,7 @@ You can add options to executable code like this
 
 disease_names=readRDS("~/Dropbox (Personal)/disease_names.rds")
 phi_logit=aperm(plogis(phi),c(2,1,3))
-#phi_logit=aperm(phi,c(2,1,3))
+phi_logit=aperm(phi,c(2,1,3))
 rownames(phi_logit)=disease_names
 l=melt(phi_logit)
 colnames(l)=c("Disease","Signature","Time","value")
@@ -65,60 +68,62 @@ ggsave(p2, filename = "signature_probabilities_disease.pdf", width = 6, height =
 library(ggplot2)
 library(viridis)  # for better color gradients
 
-l=merge(l,groups,by.x="Disease",by.y="phenotype",all.x=TRUE)
-# Adjusted ggplot
-p2 <- ggplot(l, aes(Time, Disease, fill = value)) +
-  geom_tile() +
-  facet_wrap(~ Signature) +
-  labs(x = "Time (years from 30)", y = NULL,  # Removes y-axis label
-       title = "Signature probabilities over time", fill = "Signature") +
-  scale_fill_viridis(option = "C") +  # Cool-looking viridis color scheme
-  theme(axis.text.y = element_blank(),  # Removes y-axis text
-        axis.ticks.y = element_blank())  # Removes y-axis ticks
 
-library(dplyr)
-library(ggplot2)
-library(viridis)
+# First get your data as before
+phi = model_data$phi
+phi_logit = aperm(phi,c(2,1,3))
+rownames(phi_logit) = disease_names
+l = melt(plogis(phi_logit))
+colnames(l) = c("Disease","Signature","Time","value")
 
-# Step 1: Calculate the average value for ranking
-top_diseases <- l %>%
+# Calculate mean values for each disease within each signature
+disease_means <- l %>%
   group_by(Signature, Disease) %>%
-  summarize(avg_value = mean(value, na.rm = TRUE)) %>%
+  summarize(mean_value = mean(value), .groups = "drop") %>%
   group_by(Signature) %>%
-  arrange(Signature, desc(avg_value)) %>%
-  slice_head(n = 20) %>%
-  ungroup()
+  arrange(Signature, desc(mean_value)) %>%
+  slice_head(n = 20)
 
-# Step 2: Create a unique Disease-Signature combination for filtering
+# Create the filtered dataset
 l_top <- l %>%
-  inner_join(top_diseases, by = c("Signature", "Disease")) %>%
+  inner_join(disease_means, by = c("Signature", "Disease")) %>%
   merge(groups, by.x = "Disease", by.y = "phenotype", all.x = TRUE)
 
-# Step 3: Create separate disease orders for each signature
+# Create factor levels separately for each signature
 l_top <- l_top %>%
-  group_by(Signature) %>%
-  mutate(Disease = factor(Disease, 
-                         levels = unique(Disease[order(avg_value,decreasing = F)]))) %>%
-  ungroup()
+  group_split(Signature) %>%
+  map_dfr(~{
+    sig_means <- disease_means %>% 
+      filter(Signature == first(.x$Signature)) %>%
+      arrange(desc(mean_value))
+    
+    .x %>% 
+      mutate(Disease = factor(Disease, levels = sig_means$Disease))
+  })
 
-# Step 4: Plot with free_y scales to allow different diseases per facet
+# Plot
 p2 <- ggplot(l_top, aes(Time, Disease, fill = value)) +
   geom_tile() +
   facet_wrap(~ Signature, scales = "free_y", drop = TRUE) +
   labs(x = "Time (years from 30)", y = NULL,
-       title = "Top 20 diseases per signature over time", 
+       title = "Top diseases per signature over time", 
        fill = "Weight") +
-  scale_fill_viridis_c(option = "C", direction = +1) +
+  scale_fill_viridis_c(option = "B", direction = -1) +
   theme_minimal() +
-  theme(axis.text.y = element_text(size = 8),
-        strip.text = element_text(size = 10),
-        axis.ticks.y = element_blank(),
-        panel.spacing = unit(0.5, "lines"))
+  theme(
+    axis.text.y = element_text(size = 12),
+    axis.text.x = element_text(size = 12),
+    strip.text = element_text(size = 14),
+    axis.title.x = element_text(size = 14),
+    axis.ticks.y = element_blank(),
+    panel.spacing = unit(1, "lines")
+  )
 
 print(p2)
 
-
+ggsave(p2, filename = "signature_probabilities_disease_to2p20.pdf", width = 20, height = 6)
 ```
+
 
 
 ```{r}
@@ -337,11 +342,17 @@ fit_cox_models <- function(event_times,
   return(list("all_risks" = all_risks, "all_cs" = all_cs))
 }
 
+T=max(event_times) 
+D=348
+N=9661
 # Calculate risks for all models at each age
 all_risks <- list()
 all_risk_cs <- list()
 for(age in ages) {
   time_idx <- age - 29
+  N=dim(Y)[1]
+  D=dim(Y)[2]
+  T=dim(Y)[3]
   all_risks[[as.character(age)]] <- array(NA, dim=c(N, D, 3))  # 3 models
   all_risk_cs[[as.character(age)]] <- array(NA, dim=c(D, 3))   # Changed: One value per disease/model
   
@@ -452,7 +463,7 @@ for(age in ages) {
 
 
 # Calculate means and SDs
-sum <- results2[,c("c_basic","c_aladyn","c_combined")]
+sum <- results[,c("auc_basic","auc_aladyn","auc_combined")]
 means <- apply(sum,2,function(x){mean(na.omit(x))})
 sds <- apply(sum,2,function(x){sd(na.omit(x))})
 
@@ -670,7 +681,7 @@ library(tidyverse)
 library(patchwork)
 
 plot_individual_analysis <- function(theta_pred, Y, G, disease_names, prs_names, 
-                                   individual_id=501, start_age=30) {
+                                   individual_id=4426, start_age=30,B=model_data$gamma) {
   
   
     # Debug prints
@@ -718,6 +729,8 @@ plot_individual_analysis <- function(theta_pred, Y, G, disease_names, prs_names,
   
   disease_indices <- match(cv_diseases, disease_names)
   
+
+  
   diseases_df <- as.data.frame(t(Y[individual_id, disease_indices, ])) %>%
     setNames(cv_diseases) %>%
     mutate(Age = age_range) %>%
@@ -725,12 +738,25 @@ plot_individual_analysis <- function(theta_pred, Y, G, disease_names, prs_names,
                 names_to = "Disease", 
                 values_to = "Status")
   
-  p2 <- ggplot(diseases_df, aes(x = Age, y = Status, color = Disease)) +
-    geom_line() +
+  
+  disease_indices <- which(rowSums(Y[individual_id,,])>0)
+  
+  person_disease=disease_names[disease_indices]
+                           
+  diseases_df <- as.data.frame(t(Y[individual_id, disease_indices, ])) %>%
+    setNames(person_disease) %>%
+    mutate(Age = age_range) %>%
+    pivot_longer(-Age, 
+                names_to = "Disease", 
+                values_to = "Status")
+  
+  
+  p2 <- ggplot(diseases_df, aes(x = Age, y = Disease, fill = as.factor(Status)))+
+    geom_tile() +
     labs(title = "Disease Events",
          y = "Disease Status") +
     theme_minimal() +
-    theme(legend.position = "right")
+    theme(legend.position = "right")+scale_fill_d3()
   
   # 3. Genetic risk scores
 genetic_df <- G[individual_id,] %>%
@@ -765,7 +791,107 @@ genetic_df <- G[individual_id,] %>%
 
 # Usage:
 p=plot_individual_analysis(theta_pred = theta_pred, Y = Y, G = prs, disease_names, prs_names =prs_names )
-ggsave(p, filename = "individual_analysis.pdf", width = 8, height = 12,dpi=300)
+ggsave(p, filename = "individual_analysis.pdf", width = 20, height = 12,dpi=300)
+```
+
+
+
+```{r}
+
+
+analyze_individual_trajectory <- function(individual_id, Y, G, theta, disease_names_list, prs_names_list, age_range=30:80) {
+  # Get first occurrence of each disease for ordering
+  disease_timeline <- data.frame(
+    disease = disease_names_list,
+    first_occurrence = apply(Y[individual_id,,], 1, function(x) min(which(x == 1)))
+  ) %>%
+    mutate(
+      first_occurrence = ifelse(is.infinite(first_occurrence), Inf, first_occurrence + 30),
+      ever_occurs = first_occurrence < Inf
+    )
+  
+  # Get diseases that occur for this person
+  person_disease <- disease_timeline %>%
+    filter(ever_occurs) %>%
+    arrange(first_occurrence) %>%
+    pull(disease)
+  
+  disease_indices <- match(person_disease, disease_names_list)
+  
+  # 1. Topic trajectories
+  topics_df <- as.data.frame(t(theta_pred[individual_id,,])) %>%
+    setNames(paste0("Topic ", 0:9)) %>%
+    mutate(Age = age_range) %>%
+    pivot_longer(-Age, 
+                names_to = "Topic", 
+                values_to = "Weight")
+  
+  p1 <- ggplot(topics_df, aes(x = Age, y = Weight, color = Topic)) +
+    geom_line(size = 1) +
+    labs(title = "Topic Trajectories",
+         y = "Topic Weight") +
+    theme_minimal() +
+    theme(legend.position = "right") +
+    scale_color_d3()
+  
+  # 2. Disease events - now ordered by first occurrence
+  diseases_df <- as.data.frame(t(Y[individual_id, disease_indices, ])) %>%
+    setNames(person_disease) %>%
+    mutate(Age = age_range) %>%
+    pivot_longer(-Age, 
+                names_to = "Disease", 
+                values_to = "Status") %>%
+    mutate(Disease = factor(Disease, levels = rev(person_disease)))  # Reverse order for bottom-up timeline
+  
+  p2 <- ggplot(diseases_df, aes(x = Age, y = Disease, fill = as.factor(Status))) +
+    geom_tile() +
+    labs(title = "Disease Events",
+         y = "Disease Status",fill="Status") +
+    theme_minimal() +scale_fill_manual(values = c("0" = "white", "1" = "red"))+
+    theme(legend.position = "right") 
+  
+
+  # 3. Improved genetic risk scores plot
+  genetic_df <- data.frame(t(
+    G[individual_id,]
+  ));
+  genetic_df$PRS=rownames(genetic_df)
+  colnames(genetic_df)=c("Value","PRS")
+  genetic_df=genetic_df%>%mutate(
+      Category = case_when(
+        abs(Value) >= 2 ~ "Very High",
+        abs(Value) >= 1 ~ "High",
+        abs(Value) >= 0.5 ~ "Moderate",
+        TRUE ~ "Low"
+      ),
+      Direction = ifelse(Value >= 0, "Positive", "Negative"))
+    
+  
+  p3 <- ggplot(genetic_df, aes(x = reorder(PRS, abs(Value)), y = Value)) +
+    geom_col(aes(fill = Direction)) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+    geom_hline(yintercept = c(-2, -1, 1, 2), linetype = "dotted", alpha = 0.3) +
+    scale_fill_manual(values = c("Negative" = "darkred", "Positive" = "steelblue")) +
+    labs(title = "Genetic Risk Scores",
+         subtitle = "Dotted lines at ±1 and ±2 SD",
+         y = "PRS Value (SD units)") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "right") +
+    coord_flip()
+  
+grid.arrange(p1, p2, p3, ncol = 3,widths=c(2,2,2))
+  # Combine plots with adjusted heights
+    #combined_plot <- p1 / p2 / p3 +
+    #plot_layout(heights = c(2, 2, 2)) 
+  
+  return(cp)
+}
+
+prs_names=names(G)
+individual_id=846
+a=analyze_individual_trajectory(individual_id = individual_id,Y,G,theta,disease_names,prs_names,age_range = 30:80)
+ggsave(a, filename = "individual_trajectory_earlyCAD.pdf", width = 8, height = 20,dpi=600)
 ```
 
 

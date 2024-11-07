@@ -157,6 +157,12 @@ class AladynSurvivalModel(nn.Module):
         loss_censored = -torch.sum(torch.log(1 - pi) * mask_before_event)
         # At event time:
         loss_event = -torch.sum(torch.log(pi) * mask_at_event * self.Y)
+
+        # Example:
+# For a patient censored at t=5 (Y[n,d,5] = 0):
+#mask_at_event[n,d,:] = [0,0,0,0,0,1,0,0]  # 1 at t=5
+#(1 - Y[n,d,:])       = [1,1,1,1,1,1,1,1]  # All 1s because no event
+# Result: contributes -log(1-pi[n,d,5]) to loss
         loss_no_event = -torch.sum(torch.log(1 - pi) * mask_at_event * (1 - self.Y))
 
         total_data_loss = loss_censored + loss_event + loss_no_event
@@ -216,6 +222,23 @@ class AladynSurvivalModel(nn.Module):
             'condition_number': []  # Track matrix conditioning
         }
         
+        """
+        The equivalence between L2 regularization and a Gaussian prior comes from Bayesian statistics. Here's why:
+        If gamma ~ N(0, 1/lambda_reg), then its log probability density is:
+        log p(gamma) = -0.5 * lambda_reg * ||gamma||^2 + constant
+        When we do maximum a posteriori (MAP) estimation, we maximize:
+        log p(gamma|data) ∝ log p(data|gamma) + log p(gamma)
+                    = log p(data|gamma) - 0.5 * lambda_reg * ||gamma||^2 + constant
+        Minimizing the negative of this is equivalent to minimizing:
+        Loss = -log p(data|gamma) + (lambda_reg/2) * ||gamma||^2
+        Which is exactly what we're doing with weight decay!
+        So:
+        Weight decay term: (lambda_reg/2) * ||gamma||^2
+        Is equivalent to: gamma ~ N(0, σ²) where σ² = 1/lambda_reg
+        Larger lambda_reg = smaller variance = stronger regularization
+        Smaller lambda_reg = larger variance = weaker regularization
+        This is why L2 regularization through weight decay is mathematically equivalent to placing a Gaussian prior on gamma with precision lambda_reg.
+        """
         for epoch in range(num_epochs):
             optimizer.zero_grad()
             
@@ -258,7 +281,7 @@ class AladynSurvivalModel(nn.Module):
         
         return history
     
-    
+
 ## plotting code from here down
 def plot_training_diagnostics(history):
     """Plot training diagnostics"""

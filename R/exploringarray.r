@@ -1,9 +1,9 @@
 # Load necessary library
 library(dplyr)
 library(data.table)
-expanded_data = fread("~/Dropbox (Personal)/forapp/patient_diagnoses_expanded_data.csv")
+#expanded_data = fread("~/Dropbox (Personal)/forapp/patient_diagnoses_expanded_data.csv")
 
-
+expanded_data=readRDS("~/Dropbox (Personal)/icdstuff_forARRAY.rds")
 
 
 # Read data (assuming the data is in a CSV file called 'data.csv')
@@ -14,8 +14,8 @@ df <- expanded_data
 unique_eids <- unique(df$eid)
 unique_diseases <- unique(df$diag_icd10)
 
-unique_time_bins <- sort(unique(df$age_diag))
-
+#unique_time_bins <- sort(unique(df$age_diag))
+unique_time_bins <- sort(unique(df$round))
 # Create mappings
 eid_to_index <- setNames(1:length(unique_eids), unique_eids)
 disease_to_index <- setNames(1:length(unique_diseases), unique_diseases)
