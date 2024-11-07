@@ -202,7 +202,8 @@ class AladynSurvivalModel(nn.Module):
 
         return gp_loss
 
-    def fit(self, event_times, num_epochs=100, learning_rate=1e-3, lambda_reg=1e-2):
+    def fit(self, event_times, num_epochs=100, learning_rate=1e-3, lambda_reg=1e-2
+            patience=10, min_delta=1e-4):
         """
         Fit model with detailed monitoring of parameters and stability
         """
@@ -224,6 +225,8 @@ class AladynSurvivalModel(nn.Module):
             'condition_number': []  # Track matrix conditioning
         }
         
+        best_loss = float('inf')
+        patience_counter = 0
         """
         The equivalence between L2 regularization and a Gaussian prior comes from Bayesian statistics. Here's why:
         If gamma ~ N(0, 1/lambda_reg), then its log probability density is:
@@ -258,7 +261,18 @@ class AladynSurvivalModel(nn.Module):
             history['max_grad_phi'].append(self.phi.grad.abs().max().item())
             history['max_grad_gamma'].append(self.gamma.grad.abs().max().item())
             
-            min_delta = current_loss * 1e-4  # 0.01% improvement needed
+                    # Early stopping check
+            if loss.item() < best_loss - min_delta:
+                best_loss = loss.item()
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                
+            if patience_counter >= patience:
+                print(f"Early stopping triggered at epoch {epoch}")
+                break
+            
+       
 
             # 4. Monitor kernel condition numbers
             cond_nums = []
@@ -285,6 +299,8 @@ class AladynSurvivalModel(nn.Module):
                 print(f"Mean condition number: {history['condition_number'][-1]:.2f}")
 
                 
+
+
         
         return history
     
