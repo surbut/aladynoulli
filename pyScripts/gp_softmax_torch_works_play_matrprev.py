@@ -211,6 +211,8 @@ class AladynSurvivalModel(nn.Module):
             {'params': [self.gamma], 'weight_decay': lambda_reg}
         ], lr=learning_rate)
         
+        #### Which parameters to apply weight decay to (self.gamma)
+            ### How strong the regularization should be (lambda_reg)
         # Initialize tracking
         history = {
             'loss': [],
@@ -242,6 +244,7 @@ class AladynSurvivalModel(nn.Module):
         for epoch in range(num_epochs):
             optimizer.zero_grad()
             
+            
             # 1. Monitor GP parameters before update
             history['length_scales'].append(self.length_scales.detach().numpy().copy())
             history['amplitudes'].append(torch.exp(self.log_amplitudes).detach().numpy().copy())
@@ -255,6 +258,8 @@ class AladynSurvivalModel(nn.Module):
             history['max_grad_phi'].append(self.phi.grad.abs().max().item())
             history['max_grad_gamma'].append(self.gamma.grad.abs().max().item())
             
+            min_delta = current_loss * 1e-4  # 0.01% improvement needed
+
             # 4. Monitor kernel condition numbers
             cond_nums = []
             for k in range(self.K):
@@ -269,7 +274,7 @@ class AladynSurvivalModel(nn.Module):
             history['loss'].append(loss.item())
             
             # 6. Print detailed monitoring every N epochs
-            if epoch % 10 == 0:
+            if epoch % 100 == 0:
                 print(f"\nEpoch {epoch}")
                 print(f"Loss: {loss.item():.4f}")
                 print(f"Length scales: {self.length_scales.detach().numpy()}")
@@ -278,6 +283,8 @@ class AladynSurvivalModel(nn.Module):
                     f"φ: {history['max_grad_phi'][-1]:.4f}, "
                     f"γ: {history['max_grad_gamma'][-1]:.4f}")
                 print(f"Mean condition number: {history['condition_number'][-1]:.2f}")
+
+                
         
         return history
     
