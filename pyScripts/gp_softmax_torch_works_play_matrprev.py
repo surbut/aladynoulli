@@ -202,18 +202,25 @@ class AladynSurvivalModel(nn.Module):
 
         return gp_loss
 
-    def fit(self, event_times, num_epochs=100, learning_rate=1e-3, lambda_reg=1e-2
+    def fit(self, event_times, num_epochs=100, learning_rate=1e-3, lambda_reg=1e-2,
             patience=10, min_delta=1e-4):
         """
-        Fit model with detailed monitoring of parameters and stability
+        Fit model with early stopping and parameter monitoring
+        
+        Args:
+            event_times: Tensor of event times
+            num_epochs: Maximum number of epochs to train
+            learning_rate: Learning rate for Adam optimizer
+            lambda_reg: L2 regularization strength for gamma (implies N(0,1/lambda_reg) prior)
+            patience: Number of epochs to wait for improvement before early stopping
+            min_delta: Minimum improvement in loss to be considered significant
         """
+        # Initialize optimizer
         optimizer = optim.Adam([
             {'params': [self.lambda_, self.phi, self.length_scales, self.log_amplitudes]},
             {'params': [self.gamma], 'weight_decay': lambda_reg}
         ], lr=learning_rate)
         
-        #### Which parameters to apply weight decay to (self.gamma)
-            ### How strong the regularization should be (lambda_reg)
         # Initialize tracking
         history = {
             'loss': [],
@@ -222,88 +229,70 @@ class AladynSurvivalModel(nn.Module):
             'max_grad_lambda': [],
             'max_grad_phi': [],
             'max_grad_gamma': [],
-            'condition_number': []  # Track matrix conditioning
+            'condition_number': []
         }
         
+        # Early stopping setup
         best_loss = float('inf')
         patience_counter = 0
-        """
-        The equivalence between L2 regularization and a Gaussian prior comes from Bayesian statistics. Here's why:
-        If gamma ~ N(0, 1/lambda_reg), then its log probability density is:
-        log p(gamma) = -0.5 * lambda_reg * ||gamma||^2 + constant
-        When we do maximum a posteriori (MAP) estimation, we maximize:
-        log p(gamma|data) ∝ log p(data|gamma) + log p(gamma)
-                    = log p(data|gamma) - 0.5 * lambda_reg * ||gamma||^2 + constant
-        Minimizing the negative of this is equivalent to minimizing:
-        Loss = -log p(data|gamma) + (lambda_reg/2) * ||gamma||^2
-        Which is exactly what we're doing with weight decay!
-        So:
-        Weight decay term: (lambda_reg/2) * ||gamma||^2
-        Is equivalent to: gamma ~ N(0, σ²) where σ² = 1/lambda_reg
-        Larger lambda_reg = smaller variance = stronger regularization
-        Smaller lambda_reg = larger variance = weaker regularization
-        This is why L2 regularization through weight decay is mathematically equivalent to placing a Gaussian prior on gamma with precision lambda_reg.
-        """
+        
         for epoch in range(num_epochs):
             optimizer.zero_grad()
             
-            
-            # 1. Monitor GP parameters before update
+            # First update only non-gradient history
             history['length_scales'].append(self.length_scales.detach().numpy().copy())
             history['amplitudes'].append(torch.exp(self.log_amplitudes).detach().numpy().copy())
             
-            # 2. Compute loss and update
+            # Compute loss and backprop
             loss = self.compute_loss(event_times)
             loss.backward()
             
-            # 3. Monitor gradients
+            # Now update gradient history
             history['max_grad_lambda'].append(self.lambda_.grad.abs().max().item())
             history['max_grad_phi'].append(self.phi.grad.abs().max().item())
             history['max_grad_gamma'].append(self.gamma.grad.abs().max().item())
-            
-                    # Early stopping check
-            if loss.item() < best_loss - min_delta:
-                best_loss = loss.item()
-                patience_counter = 0
-            else:
-                patience_counter += 1
-                
-            if patience_counter >= patience:
-                print(f"Early stopping triggered at epoch {epoch}")
-                break
-            
-       
 
-            # 4. Monitor kernel condition numbers
+
             cond_nums = []
             for k in range(self.K):
                 cond = torch.linalg.cond(self.K_lambda[k]).item()
                 cond_nums.append(cond)
-            history['condition_number'].append(np.mean(cond_nums))
+            history['condition_number'].append(np.mean(cond_nums))  
             
-            # 5. Clip gradients for stability
+            # Check early stopping
+            if self._check_early_stopping(loss.item(), best_loss, min_delta):
+                patience_counter = 0
+                best_loss = loss.item()
+            else:
+                patience_counter += 1
+                if patience_counter >= patience:
+                    print(f"Early stopping triggered at epoch {epoch}")
+                    break
+            
+            # Update parameters
             torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
-            
             optimizer.step()
-            history['loss'].append(loss.item())
             
-            # 6. Print detailed monitoring every N epochs
+            # Print progress
             if epoch % 100 == 0:
-                print(f"\nEpoch {epoch}")
-                print(f"Loss: {loss.item():.4f}")
-                print(f"Length scales: {self.length_scales.detach().numpy()}")
-                print(f"Amplitudes: {torch.exp(self.log_amplitudes).detach().numpy()}")
-                print(f"Max gradients - λ: {history['max_grad_lambda'][-1]:.4f}, "
-                    f"φ: {history['max_grad_phi'][-1]:.4f}, "
-                    f"γ: {history['max_grad_gamma'][-1]:.4f}")
-                print(f"Mean condition number: {history['condition_number'][-1]:.2f}")
-
-                
-
-
+                self._print_progress(epoch, loss.item(), history)
         
         return history
-    
+
+    def _check_early_stopping(self, current_loss, best_loss, min_delta):
+        """Check if current loss shows significant improvement"""
+        return current_loss < best_loss - min_delta
+
+    def _print_progress(self, epoch, loss, history):
+        """Print training progress"""
+        print(f"\nEpoch {epoch}")
+        print(f"Loss: {loss:.4f}")
+        print(f"Length scales: {self.length_scales.detach().numpy()}")
+        print(f"Amplitudes: {torch.exp(self.log_amplitudes).detach().numpy()}")
+        print(f"Max gradients - λ: {history['max_grad_lambda'][-1]:.4f}, "
+              f"φ: {history['max_grad_phi'][-1]:.4f}, "
+              f"γ: {history['max_grad_gamma'][-1]:.4f}")
+        print(f"Mean condition number: {history['condition_number'][-1]:.2f}")
 
 ## plotting code from here down
 def plot_training_diagnostics(history):
