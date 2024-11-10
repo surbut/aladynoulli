@@ -44,6 +44,16 @@ class AladynSurvivalModel(nn.Module):
         # Perform SVD
         U, S, Vh = torch.linalg.svd(Y_avg, full_matrices=False)
 
+        """Initialize pwith centered data? try?
+        ## try with centering?
+
+        disease_means = torch.mean(Y_avg, dim=0)  # D
+        Y_centered = Y_avg - disease_means[None, :]  # N x D
+    
+        # Perform SVD on centered data
+        U, S, Vh = torch.linalg.svd(Y_centered, full_matrices=False)
+       unclear if necessary"""
+        
         # Initialize gamma using genetic covariates
         lambda_init = U[:, :self.K] @ torch.diag(torch.sqrt(S[:self.K]))
         gamma_init = torch.linalg.lstsq(self.G, lambda_init).solution
@@ -202,8 +212,8 @@ class AladynSurvivalModel(nn.Module):
 
         return gp_loss
 
-    def fit(self, event_times, num_epochs=100, learning_rate=1e-3, lambda_reg=1e-2,
-            patience=10, min_delta=1e-4):
+    def fit(self, event_times, num_epochs=1000, learning_rate=1e-3, lambda_reg=1e-2,
+        convergence_threshold=1.0, patience=10):
         """
         Fit model with early stopping and parameter monitoring
         
@@ -235,6 +245,7 @@ class AladynSurvivalModel(nn.Module):
         # Early stopping setup
         best_loss = float('inf')
         patience_counter = 0
+        prev_loss = float('inf')
         
         for epoch in range(num_epochs):
             optimizer.zero_grad()
@@ -245,6 +256,8 @@ class AladynSurvivalModel(nn.Module):
             
             # Compute loss and backprop
             loss = self.compute_loss(event_times)
+            loss_val = loss.item()
+            history['loss'].append(loss_val)
             loss.backward()
             
             # Now update gradient history
@@ -258,24 +271,35 @@ class AladynSurvivalModel(nn.Module):
                 cond = torch.linalg.cond(self.K_lambda[k]).item()
                 cond_nums.append(cond)
             history['condition_number'].append(np.mean(cond_nums))  
-            
+
+
+                  # Check convergence
+            loss_change = abs(prev_loss - loss_val)
+            if loss_change < convergence_threshold:
+                print(f"\nConverged at epoch {epoch}. Loss change: {loss_change:.4f}")
+                break
+                
             # Check early stopping
-            if self._check_early_stopping(loss.item(), best_loss, min_delta):
+            if loss_val < best_loss:
                 patience_counter = 0
-                best_loss = loss.item()
+                best_loss = loss_val
             else:
                 patience_counter += 1
                 if patience_counter >= patience:
-                    print(f"Early stopping triggered at epoch {epoch}")
+                    print(f"\nEarly stopping triggered at epoch {epoch}")
                     break
             
+        
             # Update parameters
             torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
             optimizer.step()
             
+            # Store current loss for next iteration
+            prev_loss = loss_val
             # Print progress
             if epoch % 100 == 0:
                 self._print_progress(epoch, loss.item(), history)
+                print(f"Loss change: {loss_change:.4f}")
         
         return history
 
