@@ -223,7 +223,7 @@ class AladynSurvivalModel(nn.Module):
             learning_rate: Learning rate for Adam optimizer
             lambda_reg: L2 regularization strength for gamma (implies N(0,1/lambda_reg) prior)
             patience: Number of epochs to wait for improvement before early stopping
-            min_delta: Minimum improvement in loss to be considered significant
+            convergence: changing in loss 
         """
         # Initialize optimizer
         optimizer = optim.Adam([
