@@ -192,6 +192,7 @@ class AladynSurvivalModeldiffKernelsavgloss(nn.Module):
     # 2. Events (E<T-1, Y=1): contributes to survival up to E and event at E
     # 3. Early censoring (E<T-1, Y=0): contributes to survival up to E and no-event at E
     # For times before event/censoring: contribute to survival
+    
         loss_censored = -torch.sum(torch.log(1 - pi) * mask_before_event)/self.N
         # At event time:
         loss_event = -torch.sum(torch.log(pi) * mask_at_event * self.Y)/self.N

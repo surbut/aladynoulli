@@ -168,16 +168,16 @@ class AladynSurvivalFixedKernels(nn.Module):
     # 2. Events (E<T-1, Y=1): contributes to survival up to E and event at E
     # 3. Early censoring (E<T-1, Y=0): contributes to survival up to E and no-event at E
     # For times before event/censoring: contribute to survival
-        loss_censored = -torch.sum(torch.log(1 - pi) * mask_before_event)/self.N
+        loss_censored = -torch.sum(torch.log(1 - pi) * mask_before_event)
         # At event time:
-        loss_event = -torch.sum(torch.log(pi) * mask_at_event * self.Y)/self.N
+        loss_event = -torch.sum(torch.log(pi) * mask_at_event * self.Y)
 
         # Example:
 # For a patient censored at t=5 (Y[n,d,5] = 0):
 #mask_at_event[n,d,:] = [0,0,0,0,0,1,0,0]  # 1 at t=5
 #(1 - Y[n,d,:])       = [1,1,1,1,1,1,1,1]  # All 1s because no event
 # Result: contributes -log(1-pi[n,d,5]) to loss
-        loss_no_event = -torch.sum(torch.log(1 - pi) * mask_at_event * (1 - self.Y))/ self.N
+        loss_no_event = -torch.sum(torch.log(1 - pi) * mask_at_event * (1 - self.Y))
 
         total_data_loss = loss_censored + loss_event + loss_no_event
 
@@ -217,7 +217,7 @@ class AladynSurvivalFixedKernels(nn.Module):
                 gp_loss_phi += 0.5 * torch.sum(v_d.T @ dev_d)
 
         # Return separately averaged terms
-        return gp_loss_lambda / self.N + gp_loss_phi / self.D
+        return gp_loss_lambda  + gp_loss_phi 
 
 
     def fit(self, event_times, num_epochs=1000, learning_rate=1e-3, lambda_reg=1e-2,
@@ -279,8 +279,11 @@ class AladynSurvivalFixedKernels(nn.Module):
                     print(f"\nEarly stopping triggered at epoch {epoch}")
                     break
             
-            # Update parameters and previous loss
+            # Update parameters
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
             optimizer.step()
+            # Update parameters and previous loss
+            
             prev_loss = loss_val
             
             if epoch % 100 == 0:
@@ -358,7 +361,7 @@ def generate_synthetic_data(N=100, D=5, T=50, K=3, P=5, return_true_params=False
     prevalence = np.random.uniform(0.01, 0.05, D)
 
     # Length scales and amplitudes for GP kernels
-    length_scales = np.random.uniform(T / 3, T / 2, K)
+    length_scales = np.random.uniform(T / 4, T / 3, K)
     amplitudes = np.random.uniform(0.8, 1.2, K)
 
     # Generate time differences for covariance matrices

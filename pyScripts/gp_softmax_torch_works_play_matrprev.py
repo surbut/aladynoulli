@@ -213,7 +213,7 @@ class AladynSurvivalModel(nn.Module):
         return gp_loss
 
     def fit(self, event_times, num_epochs=1000, learning_rate=1e-3, lambda_reg=1e-2,
-        convergence_threshold=1.0, patience=10):
+        convergence_threshold=1e-2, patience=10):
         """
         Fit model with early stopping and parameter monitoring
         
