@@ -221,17 +221,15 @@ class AladynSurvivalFixedKernels(nn.Module):
 
 
     def fit(self, event_times, num_epochs=1000, learning_rate=1e-3, lambda_reg=1e-2,
-        convergence_threshold=1.0, patience=10):
+        convergence_threshold=1e-3, patience=10):
         """
         Fit model with early stopping and parameter monitoring
         """
-        # Only optimize lambda_, phi, and gamma (no kernel parameters)
         optimizer = optim.Adam([
             {'params': [self.lambda_, self.phi]},
             {'params': [self.gamma], 'weight_decay': lambda_reg}
         ], lr=learning_rate)
         
-        # Simplified history - removed kernel parameter tracking
         history = {
             'loss': [],
             'max_grad_lambda': [],
@@ -265,7 +263,13 @@ class AladynSurvivalFixedKernels(nn.Module):
             history['condition_number_lambda'].append(np.mean(lambda_conds))
             history['condition_number_phi'].append(np.mean(phi_conds))
 
-            # Early stopping logic
+            # Check convergence
+            loss_change = abs(prev_loss - loss_val)
+            if loss_change < convergence_threshold:
+                print(f"\nConverged at epoch {epoch}. Loss change: {loss_change:.4f}")
+                break
+            
+            # Early stopping check
             if loss_val < best_loss:
                 patience_counter = 0
                 best_loss = loss_val
@@ -275,8 +279,9 @@ class AladynSurvivalFixedKernels(nn.Module):
                     print(f"\nEarly stopping triggered at epoch {epoch}")
                     break
             
-            # Update parameters
+            # Update parameters and previous loss
             optimizer.step()
+            prev_loss = loss_val
             
             if epoch % 100 == 0:
                 print(f"Epoch {epoch}, Loss: {loss_val:.4f}")
@@ -321,21 +326,6 @@ def plot_training_diagnostics(history):
     
     # Plot condition numbers
     plt.subplot(2, 2, 3)
-    plt.plot(history['condition_number_lambda'], label='λ kernels')
-    lambda_amps = np.array(history['lambda_amplitudes'])
-    phi_amps = np.array(history['phi_amplitudes'])
-    
-    for k in range(lambda_amps.shape[1]):
-        plt.plot(lambda_amps[:, k], '--', label=f'λ Topic {k}')
-        plt.plot(phi_amps[:, k], ':', label=f'φ Topic {k}')
-    plt.title('Amplitudes Over Time')
-    plt.xlabel('Epoch')
-    plt.ylabel('Amplitude')
-    plt.legend()
-    plt.grid(True)
-    
-    # Plot condition numbers
-    plt.subplot(2, 2, 4)
     plt.plot(history['condition_number_lambda'], label='λ kernels')
     plt.plot(history['condition_number_phi'], label='φ kernels')
     plt.yscale('log')
