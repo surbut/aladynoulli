@@ -7,14 +7,14 @@ from scipy.special import expit
 from scipy.stats import multivariate_normal
 import matplotlib.pyplot as plt
 
-class AladynSurvivalModel(nn.Module):
-    def __init__(self, N, D, T, K, P, G, Y, prevalence_t):
+class AladynSurvivalFixedKernelsAvgLoss(nn.Module):
+    def __init__(self, N, D, T, K, P, G, Y, prevalence_t, logit_prev_t):
         super().__init__()
-        self.N = N  # Number of individuals
-        self.D = D  # Number of diseases
-        self.T = T  # Number of time points
-        self.K = K  # Number of topics
-        self.P = P  # Number of genetic covariates
+        self.N = N
+        self.D = D
+        self.T = T
+        self.K = K
+        self.P = P
 
         # Convert inputs to tensors
         self.G = torch.tensor(G, dtype=torch.float32)            # Genetic covariates (N x P)
@@ -22,19 +22,23 @@ class AladynSurvivalModel(nn.Module):
         
         # Use time-dependent prevalence (D x T)
         self.prevalence_t = torch.tensor(prevalence_t, dtype=torch.float32)  # Disease prevalence over time
-        
+        self.logit_prev_t = torch.tensor(logit_prev_t, dtype=torch.float32)
+
         # Compute logit of time-dependent prevalence for centering phi
         epsilon = 1e-8  # To avoid log(0)
-        self.logit_prev_t = torch.log(
-            (self.prevalence_t + epsilon) / (1 - self.prevalence_t + epsilon)
-        )  # (D x T)
-
-        # Initialize GP kernel hyperparameters with more stable values
-        self.length_scales = nn.Parameter(torch.tensor(np.full(K, T / 3), dtype=torch.float32))
-        self.log_amplitudes = nn.Parameter(torch.zeros(K, dtype=torch.float32))
+        
+        # Fixed kernel parameters - these are just numbers, not nn.Parameters
+        self.lambda_length_scale = T/4
+        self.phi_length_scale = T/3
+        self.amplitude = 1.0
 
         # Initialize parameters
         self.initialize_params()
+        
+        # Compute kernels ONCE during initialization
+        self.update_kernels()  #
+
+    
 
     def initialize_params(self):
         """Initialize parameters using SVD and GP priors"""
@@ -50,7 +54,7 @@ class AladynSurvivalModel(nn.Module):
         disease_means = torch.mean(Y_avg, dim=0)  # D
         Y_centered = Y_avg - disease_means[None, :]  # N x D
     
-        # Perform SVD on centered data
+        # Perform SVD on centered datal
         U, S, Vh = torch.linalg.svd(Y_centered, full_matrices=False)
        unclear if necessary"""
         
@@ -87,7 +91,7 @@ class AladynSurvivalModel(nn.Module):
                 self.phi.data[k, d, :] = mean + eps
 
     def update_kernels(self):
-        """Update covariance matrices with condition number control"""
+        """Compute fixed covariance matrices"""
         times = torch.arange(self.T, dtype=torch.float32)
         sq_dists = (times.unsqueeze(0) - times.unsqueeze(1)) ** 2
         
@@ -97,15 +101,12 @@ class AladynSurvivalModel(nn.Module):
         self.K_lambda = []
         self.K_phi = []
         
-        for k in range(self.K):
-            # More restrictive bounds on parameters
-            length_scale = torch.clamp(self.length_scales[k], min=max(1.0, self.T/20), max=self.T/2)
-            amplitude = torch.exp(torch.clamp(self.log_amplitudes[k], min=-2.0, max=1.0))
-            
-            # Compute base kernel
-            K = amplitude ** 2 * torch.exp(-0.5 * sq_dists / (length_scale ** 2))
-            
-            # Add adaptive jitter based on condition number
+        # Compute kernels with fixed parameters
+        K_lambda = self.amplitude ** 2 * torch.exp(-0.5 * sq_dists / (self.lambda_length_scale ** 2))
+        K_phi = self.amplitude ** 2 * torch.exp(-0.5 * sq_dists / (self.phi_length_scale ** 2))
+        
+        # Add jitter to each kernel
+        for K, name in [(K_lambda, 'lambda'), (K_phi, 'phi')]:
             jitter = 1e-4
             while True:
                 K_test = K + jitter * torch.eye(self.T)
@@ -113,17 +114,18 @@ class AladynSurvivalModel(nn.Module):
                 if cond < max_condition:
                     break
                 jitter *= 2
-                if jitter > 0.1:  # Emergency break
-                    print(f"Warning: Large jitter needed for topic {k}")
+                if jitter > 0.1:
+                    print(f"Warning: Large jitter needed for {name} kernel")
                     break
             
-            K = K + jitter * torch.eye(self.T)
-            self.K_lambda.append(K)
-            self.K_phi.append(K.clone())
+            if name == 'lambda':
+                self.K_lambda = [K + jitter * torch.eye(self.T)] * self.K
+            else:
+                self.K_phi = [K + jitter * torch.eye(self.T)] * self.K
 
     def forward(self):
-        # Update kernels (in case hyperparameters have changed)
-        self.update_kernels()
+        
+        
 
         # Compute theta using softmax over topics (N x K x T)
         theta = torch.softmax(self.lambda_, dim=1)  # N x K x T
@@ -141,108 +143,88 @@ class AladynSurvivalModel(nn.Module):
         Compute the negative log-likelihood loss for survival data.
         """
         pi, theta, phi_prob = self.forward()
-
         # Avoid log(0) by adding a small epsilon
         epsilon = 1e-8
         pi = torch.clamp(pi, epsilon, 1 - epsilon)
-
         N, D, T = self.Y.shape
         event_times_tensor = torch.tensor(event_times, dtype=torch.long)
-
         # Create masks for events and censoring
         time_grid = torch.arange(T).unsqueeze(0).unsqueeze(0)  # 1 x 1 x T
         event_times_expanded = event_times_tensor.unsqueeze(-1)  # N x D x 1
-
         # Mask for times before the event, # Masks automatically handle right-censoring because event_times = T
         mask_before_event = (time_grid < event_times_expanded).float()  # N x D x T
         # Mask for event time
         mask_at_event = (time_grid == event_times_expanded).float()  # N x D x T
-
         # Compute loss components
          # Loss components work automatically because:
-    # 1. Right-censored (E=T-1, Y=0): contributes to survival up to T-1 and no-event at T-1
-    # 2. Events (E<T-1, Y=1): contributes to survival up to E and event at E
-    # 3. Early censoring (E<T-1, Y=0): contributes to survival up to E and no-event at E
-    # For times before event/censoring: contribute to survival
+        # 1. Right-censored (E=T-1, Y=0): contributes to survival up to T-1 and no-event at T-1
+        # 2. Events (E<T-1, Y=1): contributes to survival up to E and event at E
+        # 3. Early censoring (E<T-1, Y=0): contributes to survival up to E and no-event at E
+        # For times before event/censoring: contribute to survival
         loss_censored = -torch.sum(torch.log(1 - pi) * mask_before_event)
         # At event time:
         loss_event = -torch.sum(torch.log(pi) * mask_at_event * self.Y)
-
         # Example:
-# For a patient censored at t=5 (Y[n,d,5] = 0):
-#mask_at_event[n,d,:] = [0,0,0,0,0,1,0,0]  # 1 at t=5
-#(1 - Y[n,d,:])       = [1,1,1,1,1,1,1,1]  # All 1s because no event
-# Result: contributes -log(1-pi[n,d,5]) to loss
+        # For a patient censored at t=5 (Y[n,d,5] = 0):
+        #mask_at_event[n,d,:] = [0,0,0,0,0,1,0,0]  # 1 at t=5
+        #(1 - Y[n,d,:])       = [1,1,1,1,1,1,1,1]  # All 1s because no event
+        # Result: contributes -log(1-pi[n,d,5]) to loss
         loss_no_event = -torch.sum(torch.log(1 - pi) * mask_at_event * (1 - self.Y))
-
-        total_data_loss = loss_censored + loss_event + loss_no_event
-
+          # Normalize by N (total number of individuals)
+        total_data_loss = (loss_censored + loss_event + loss_no_event) / self.N
+    
         # GP prior loss remains the same
         gp_loss = self.compute_gp_prior_loss()
         total_loss = total_data_loss + gp_loss
         return total_loss
-
     def compute_gp_prior_loss(self):
-        """Compute the GP prior loss with time-dependent mean"""
-        gp_loss = 0.0
-        N, K, T = self.lambda_.shape
-        K, D, T = self.phi.shape
-
-        for k in range(K):
+        """
+        Compute the average GP prior loss with time-dependent mean.
+        Lambda terms averaged by N, Phi terms averaged by D.
+        """
+        gp_loss_lambda = 0.0
+        gp_loss_phi = 0.0
+        for k in range(self.K):
             L_lambda = torch.linalg.cholesky(self.K_lambda[k])
             L_phi = torch.linalg.cholesky(self.K_phi[k])
-
-            # Lambda GP prior (unchanged)
+            # Lambda GP prior (averaged by N)
             lambda_k = self.lambda_[:, k, :]
             mean_lambda_k = (self.G @ self.gamma[:, k]).unsqueeze(1)
             deviations_lambda = lambda_k - mean_lambda_k
-
-            for i in range(N):
+            for i in range(self.N):
                 dev_i = deviations_lambda[i:i+1].T
                 v_i = torch.cholesky_solve(dev_i, L_lambda)
-                gp_loss += 0.5 * torch.sum(v_i.T @ dev_i)
-
-            # Phi GP prior with time-dependent mean
-            phi_k = self.phi[k, :, :]  # D x T
-            for d in range(D):
-                mean_phi_d = self.logit_prev_t[d, :]  # Use time-dependent mean
-                dev_d = (phi_k[d:d+1, :] - mean_phi_d).T  # T x 1
+                gp_loss_lambda += 0.5 * torch.sum(v_i.T @ dev_i)
+            # Phi GP prior (averaged by D)
+            phi_k = self.phi[k, :, :]
+            for d in range(self.D):
+                mean_phi_d = self.logit_prev_t[d, :]
+                dev_d = (phi_k[d:d+1, :] - mean_phi_d).T
                 v_d = torch.cholesky_solve(dev_d, L_phi)
-                gp_loss += 0.5 * torch.sum(v_d.T @ dev_d)
+                gp_loss_phi += 0.5 * torch.sum(v_d.T @ dev_d)
+        # Return separately averaged terms
+        return gp_loss_lambda / self.N + gp_loss_phi / self.D
 
-        return gp_loss
 
     def fit(self, event_times, num_epochs=1000, learning_rate=1e-3, lambda_reg=1e-2,
-        convergence_threshold=1e-2, patience=10):
+        convergence_threshold=1e-3, patience=10):
         """
         Fit model with early stopping and parameter monitoring
-        
-        Args:
-            event_times: Tensor of event times
-            num_epochs: Maximum number of epochs to train
-            learning_rate: Learning rate for Adam optimizer
-            lambda_reg: L2 regularization strength for gamma (implies N(0,1/lambda_reg) prior)
-            patience: Number of epochs to wait for improvement before early stopping
-            convergence: changing in loss 
         """
-        # Initialize optimizer
         optimizer = optim.Adam([
-            {'params': [self.lambda_, self.phi, self.length_scales, self.log_amplitudes]},
+            {'params': [self.lambda_, self.phi]},
             {'params': [self.gamma], 'weight_decay': lambda_reg}
         ], lr=learning_rate)
         
-        # Initialize tracking
         history = {
             'loss': [],
-            'length_scales': [],
-            'amplitudes': [],
             'max_grad_lambda': [],
             'max_grad_phi': [],
             'max_grad_gamma': [],
-            'condition_number': []
+            'condition_number_lambda': [],
+            'condition_number_phi': []
         }
         
-        # Early stopping setup
         best_loss = float('inf')
         patience_counter = 0
         prev_loss = float('inf')
@@ -250,36 +232,30 @@ class AladynSurvivalModel(nn.Module):
         for epoch in range(num_epochs):
             optimizer.zero_grad()
             
-            # First update only non-gradient history
-            history['length_scales'].append(self.length_scales.detach().numpy().copy())
-            history['amplitudes'].append(torch.exp(self.log_amplitudes).detach().numpy().copy())
-            
             # Compute loss and backprop
             loss = self.compute_loss(event_times)
             loss_val = loss.item()
             history['loss'].append(loss_val)
             loss.backward()
             
-            # Now update gradient history
+            # Track gradients
             history['max_grad_lambda'].append(self.lambda_.grad.abs().max().item())
             history['max_grad_phi'].append(self.phi.grad.abs().max().item())
             history['max_grad_gamma'].append(self.gamma.grad.abs().max().item())
 
+            # Track condition numbers
+            lambda_conds = [torch.linalg.cond(K).item() for K in self.K_lambda]
+            phi_conds = [torch.linalg.cond(K).item() for K in self.K_phi]
+            history['condition_number_lambda'].append(np.mean(lambda_conds))
+            history['condition_number_phi'].append(np.mean(phi_conds))
 
-            cond_nums = []
-            for k in range(self.K):
-                cond = torch.linalg.cond(self.K_lambda[k]).item()
-                cond_nums.append(cond)
-            history['condition_number'].append(np.mean(cond_nums))  
-
-
-                  # Check convergence
+            # Check convergence
             loss_change = abs(prev_loss - loss_val)
             if loss_change < convergence_threshold:
                 print(f"\nConverged at epoch {epoch}. Loss change: {loss_change:.4f}")
                 break
-                
-            # Check early stopping
+            
+            # Early stopping check
             if loss_val < best_loss:
                 patience_counter = 0
                 best_loss = loss_val
@@ -289,64 +265,64 @@ class AladynSurvivalModel(nn.Module):
                     print(f"\nEarly stopping triggered at epoch {epoch}")
                     break
             
-        
-            # Update parameters
-            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+            # Update parameters, don't use clipping
+            #torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
             optimizer.step()
+            # Update parameters and previous loss
             
-            # Store current loss for next iteration
             prev_loss = loss_val
-            # Print progress
+            
             if epoch % 100 == 0:
-                self._print_progress(epoch, loss.item(), history)
-                print(f"Loss change: {loss_change:.4f}")
+                print(f"Epoch {epoch}, Loss: {loss_val:.4f}")
         
         return history
-
-    def _check_early_stopping(self, current_loss, best_loss, min_delta):
-        """Check if current loss shows significant improvement"""
-        return current_loss < best_loss - min_delta
 
     def _print_progress(self, epoch, loss, history):
         """Print training progress"""
         print(f"\nEpoch {epoch}")
         print(f"Loss: {loss:.4f}")
-        print(f"Length scales: {self.length_scales.detach().numpy()}")
-        print(f"Amplitudes: {torch.exp(self.log_amplitudes).detach().numpy()}")
         print(f"Max gradients - λ: {history['max_grad_lambda'][-1]:.4f}, "
               f"φ: {history['max_grad_phi'][-1]:.4f}, "
               f"γ: {history['max_grad_gamma'][-1]:.4f}")
-        print(f"Mean condition number: {history['condition_number'][-1]:.2f}")
+        print(f"Mean condition numbers - λ: {history['condition_number_lambda'][-1]:.2f}, "
+              f"φ: {history['condition_number_phi'][-1]:.2f}")
 
 ## plotting code from here down
 def plot_training_diagnostics(history):
-    """Plot training diagnostics"""
-    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+    """Plot training diagnostics for fixed kernel model"""
+    plt.figure(figsize=(15, 8))
     
-    # Loss
-    axes[0,0].plot(history['loss'])
-    axes[0,0].set_title('Training Loss')
-    axes[0,0].set_yscale('log')
+    # Plot loss
+    plt.subplot(2, 2, 1)
+    plt.plot(history['loss'])
+    plt.yscale('log')
+    plt.title('Training Loss Over Time')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.grid(True)
     
-    # GP Parameters
-    length_scales = np.array(history['length_scales'])
-    for k in range(length_scales.shape[1]):
-        axes[0,1].plot(length_scales[:,k], label=f'Topic {k}')
-    axes[0,1].set_title('Length Scales')
-    axes[0,1].legend()
+    # Plot gradients
+    plt.subplot(2, 2, 2)
+    plt.plot(history['max_grad_lambda'], label='λ')
+    plt.plot(history['max_grad_phi'], label='φ')
+    plt.plot(history['max_grad_gamma'], label='γ')
+    plt.yscale('log')
+    plt.title('Maximum Gradients')
+    plt.xlabel('Epoch')
+    plt.ylabel('Gradient Magnitude')
+    plt.legend()
+    plt.grid(True)
     
-    # Gradients
-    axes[1,0].plot(history['max_grad_lambda'], label='λ')
-    axes[1,0].plot(history['max_grad_phi'], label='φ')
-    axes[1,0].plot(history['max_grad_gamma'], label='γ')
-    axes[1,0].set_title('Max Gradients')
-    axes[1,0].set_yscale('log')
-    axes[1,0].legend()
-    
-    # Condition Numbers
-    axes[1,1].plot(history['condition_number'])
-    axes[1,1].set_title('Kernel Condition Numbers')
-    axes[1,1].set_yscale('log')
+    # Plot condition numbers
+    plt.subplot(2, 2, 3)
+    plt.plot(history['condition_number_lambda'], label='λ kernels')
+    plt.plot(history['condition_number_phi'], label='φ kernels')
+    plt.yscale('log')
+    plt.title('Kernel Condition Numbers')
+    plt.xlabel('Epoch')
+    plt.ylabel('Condition Number')
+    plt.legend()
+    plt.grid(True)
     
     plt.tight_layout()
     plt.show()
@@ -371,7 +347,7 @@ def generate_synthetic_data(N=100, D=5, T=50, K=3, P=5, return_true_params=False
     prevalence = np.random.uniform(0.01, 0.05, D)
 
     # Length scales and amplitudes for GP kernels
-    length_scales = np.random.uniform(T / 3, T / 2, K)
+    length_scales = np.random.uniform(T / 4, T / 3, K)
     amplitudes = np.random.uniform(0.8, 1.2, K)
 
     # Generate time differences for covariance matrices
@@ -579,7 +555,33 @@ def plot_best_matches(true_pi, pred_pi, n_samples=10, n_cols=2):
 
 # Use after model fitting:
 # Example of preparing smoothed time-dependent prevalence
+
+
 def compute_smoothed_prevalence(Y, window_size=5):
+    """Compute smoothed time-dependent prevalence on logit scale"""
+    N, D, T = Y.shape
+    prevalence_t = np.zeros((D, T))
+    logit_prev_t = np.zeros((D, T))
+    
+    for d in range(D):
+        # Compute raw prevalence at each time point
+        raw_prev = Y[:, d, :].mean(axis=0)
+        
+        # Convert to logit scale
+        epsilon = 1e-8
+        logit_prev = np.log((raw_prev + epsilon) / (1 - raw_prev + epsilon))
+        
+        # Smooth on logit scale
+        from scipy.ndimage import gaussian_filter1d
+        smoothed_logit = gaussian_filter1d(logit_prev, sigma=window_size)
+        
+        # Store both versions
+        logit_prev_t[d, :] = smoothed_logit
+        prevalence_t[d, :] = 1 / (1 + np.exp(-smoothed_logit))
+    
+    return prevalence_t, logit_prev_t
+
+def compute_smoothed_prevalenceold(Y, window_size=5):
     """Compute smoothed time-dependent prevalence"""
     N, D, T = Y.shape
     prevalence_t = np.zeros((D, T))
@@ -593,6 +595,8 @@ def compute_smoothed_prevalence(Y, window_size=5):
         prevalence_t[d, :] = gaussian_filter1d(raw_prev, sigma=window_size)
     
     return prevalence_t
+
+
 
 # When initializing the model:
 #prevalence_t = compute_smoothed_prevalence(Y, window_size=5)
