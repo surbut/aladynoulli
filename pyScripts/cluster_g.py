@@ -6,6 +6,8 @@ from scipy.spatial.distance import pdist, squareform
 from scipy.special import expit
 from scipy.stats import multivariate_normal
 import matplotlib.pyplot as plt
+from sklearn.cluster import SpectralClustering  # Add this import
+
 
 class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
     def __init__(self, N, D, T, K, P, G, Y, prevalence_t):
@@ -15,98 +17,81 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
         self.T = T
         self.K = K
         self.P = P
+        self.psi = None 
 
         # Convert inputs to tensors
-        self.G = torch.tensor(G, dtype=torch.float32)            # Genetic covariates (N x P)
-        self.Y = torch.tensor(Y, dtype=torch.float32)            # Disease occurrences (N x D x T)
+        self.G = torch.tensor(G, dtype=torch.float32)
+        self.Y = torch.tensor(Y, dtype=torch.float32)
         
-        # Use time-dependent prevalence (D x T)
-        self.prevalence_t = torch.tensor(prevalence_t, dtype=torch.float32)  # Disease prevalence over time
-
-        epsilon = 1e-8  # To avoid log(0)
+        # Store prevalence and compute logit
+        self.prevalence_t = torch.tensor(prevalence_t, dtype=torch.float32)
+        epsilon = 1e-8
         self.logit_prev_t = torch.log(
             (self.prevalence_t + epsilon) / (1 - self.prevalence_t + epsilon)
-        )  # (D x T)
+        )  # D x T
         
-
-        # Compute logit of time-dependent prevalence for centering phi
-        epsilon = 1e-8  # To avoid log(0)
-        
-        # Fixed kernel parameters - these are just numbers, not nn.Parameters
+        # Fixed kernel parameters
         self.lambda_length_scale = T/4
         self.phi_length_scale = T/3
         self.amplitude = 1.0
 
         # Initialize parameters
         self.initialize_params()
-        
-        # Compute kernels ONCE during initialization
-        self.update_kernels()  #
+        self.update_kernels()
 
-        self.psi = None  # Will be initialized in initialize_params()
+         # Will be initialized in initialize_params()
 
     
 
     def initialize_params(self):
         """Initialize parameters using SVD and GP priors"""
-        # Print dimensions for debugging
-        print(f"T (time points): {self.T}")
-        print(f"logit_prev_t shape: {self.logit_prev_t.shape}")
+        print("Starting initialization...")
         
-        # Rest of initialization
+        # First initialize psi with clusters
         Y_avg = torch.mean(self.Y, dim=2)
-        print(f"Y_avg shape: {Y_avg.shape}")
+        Y_corr = torch.corrcoef(Y_avg.T)
+        similarity = (Y_corr + 1) / 2
         
-        # Initialize parameters
-        self.phi = nn.Parameter(torch.zeros((self.K, self.D, self.T)))
-        print(f"phi shape: {self.phi.shape}")
-        
-        # Initialize parameters
-        self.gamma = nn.Parameter(torch.zeros((self.P, self.K)))
-        print(f"gamma shape: {self.gamma.shape}")
-        
-        # Initialize parameters
-        self.lambda_ = nn.Parameter(torch.zeros((self.N, self.K, self.T)))
-        print(f"lambda shape: {self.lambda_.shape}")
-        
-        # Initialize covariance matrices
-        self.update_kernels()
-
-        # Compute and store clusters
-        Y_avg = torch.mean(self.Y, dim=2)  # N x D
-        Y_corr = torch.corrcoef(Y_avg.T)  # D x D correlation matrix
-        similarity = (Y_corr + 1) / 2  # Scale to [0,1]
-        
-        # Store clusters and members
+        # Store clusters
         self.clusters = SpectralClustering(n_clusters=self.K-1).fit_predict(similarity.numpy())
-        self.cluster_members = {}
-        for k in range(self.K-1):
-            cluster_mask = (self.clusters == k)
-            self.cluster_members[k] = np.where(cluster_mask)[0]
         
-        # Initialize psi using stored clusters
+        # Initialize psi FIRST and make sure it's assigned
         psi_init = torch.zeros((self.K, self.D))
         for k in range(self.K-1):
             cluster_mask = (self.clusters == k)
-            psi_init[k, cluster_mask] = 1.0     # positive for cluster diseases
-            psi_init[k, ~cluster_mask] = -0.1   # slight negative for non-cluster
-        psi_init[self.K-1, :] = -1.0  # healthy state
+            psi_init[k, cluster_mask] = 1.0
+            psi_init[k, ~cluster_mask] = -0.1
+        psi_init[self.K-1, :] = -1.0
         
+        # Explicitly assign as Parameter
         self.psi = nn.Parameter(psi_init)
-
-           # Initialize phi as mu + psi
+        
+        # Then initialize other parameters
         self.phi = nn.Parameter(torch.zeros((self.K, self.D, self.T)))
+        self.gamma = nn.Parameter(torch.zeros((self.P, self.K)))
+        self.lambda_ = nn.Parameter(torch.zeros((self.N, self.K, self.T)))
+        
+        # Store cluster members after psi is initialized
+        self.cluster_members = {}
+        for k in range(self.K-1):
+            self.cluster_members[k] = np.where(self.clusters == k)[0]
+        
+        print("Initializing other parameters...")
+        # Initialize other parameters
         for k in range(self.K):
             for d in range(self.D):
-                # Base temporal pattern + cluster deviation
                 self.phi.data[k, d, :] = self.logit_prev_t[d, :] + self.psi[k, d]
         
-        # Initialize lambda based on clusters
-        lambda_init = torch.zeros((self.N, self.K))
+        # Initialize lambda
+        lambda_init = torch.zeros((self.N, self.K, self.T))
         for k in range(self.K-1):
             cluster_diseases = self.cluster_members[k]
-            lambda_init[:, k] = Y_avg[:, cluster_diseases].mean(dim=1)
-        lambda_init[:, -1] = -Y_avg.mean(dim=1)  # healthy state
+            base_value = Y_avg[:, cluster_diseases].mean(dim=1)
+            lambda_init[:, k, :] = base_value.unsqueeze(-1).expand(-1, self.T)
+        lambda_init[:, -1, :] = (-Y_avg.mean(dim=1)).unsqueeze(-1).expand(-1, self.T)
+        self.lambda_ = nn.Parameter(lambda_init)
+        
+        print("Initialization complete!")
 
     def update_kernels(self):
         """Compute fixed covariance matrices"""
@@ -146,6 +131,10 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
         Forward pass computing pi from lambda and phi with cluster deviations
         Returns: pi (N x D x T), theta (N x K x T), phi_prob (K x D x T)
         """
+        # Print shapes for debugging
+        print("logit_prev_t shape:", self.logit_prev_t.shape)
+        print("psi shape:", self.psi.shape)
+        
         # Compute theta using softmax over topics (N x K x T)
         theta = torch.softmax(self.lambda_, dim=1)  # N x K x T
 
@@ -154,7 +143,6 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
         
         # Add cluster deviations to get full phi (K x D x T)
         phi = mu_dt.unsqueeze(0) + self.psi.unsqueeze(-1)  
-        # Each disease's temporal pattern gets shifted by its cluster-specific deviation
         
         # Transform to probability space
         phi_prob = torch.sigmoid(phi)  # K x D x T
@@ -234,6 +222,30 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
                 gp_loss_phi += 0.5 * torch.sum(v_d.T @ dev_d)
         # Return separately averaged terms
         return gp_loss_lambda / self.N + gp_loss_phi / self.D
+        
+    def visualize_clusters(self, disease_names):
+        """
+        Visualize cluster assignments and disease names
+        
+        Parameters:
+        disease_names: list of disease names corresponding to columns in Y
+        """
+        Y_avg = torch.mean(self.Y, dim=2)
+        Y_corr = torch.corrcoef(Y_avg.T)
+        similarity = (Y_corr + 1) / 2
+        clusters = SpectralClustering(n_clusters=self.K-1).fit_predict(similarity.numpy())
+        
+        print("\nCluster Assignments:")
+        for k in range(self.K-1):
+            print(f"\nCluster {k}:")
+            cluster_diseases = [disease_names[i] for i in range(len(clusters)) if clusters[i] == k]
+            # Get prevalence for each disease
+            prevalences = Y_avg[:, clusters == k].mean(dim=0)
+            
+            for disease, prev in zip(cluster_diseases, prevalences):
+                print(f"  - {disease} (prevalence: {prev:.4f})")
+        
+        print("\nHealthy State (Topic {self.K-1})")
 
 
     def fit(self, event_times, num_epochs=1000, learning_rate=1e-3, lambda_reg=1e-2,
@@ -620,26 +632,3 @@ def compute_smoothed_prevalence(Y, window_size=5):
 #prevalence_t = compute_smoothed_prevalence(Y, window_size=5)
 #model = AladynSurvivalModel(N, D, T, K, P, G, Y, prevalence_t)
 
-def visualize_clusters(self, disease_names):
-    """
-    Visualize cluster assignments and disease names
-    
-    Parameters:
-    disease_names: list of disease names corresponding to columns in Y
-    """
-    Y_avg = torch.mean(self.Y, dim=2)
-    Y_corr = torch.corrcoef(Y_avg.T)
-    similarity = (Y_corr + 1) / 2
-    clusters = SpectralClustering(n_clusters=self.K-1).fit_predict(similarity.numpy())
-    
-    print("\nCluster Assignments:")
-    for k in range(self.K-1):
-        print(f"\nCluster {k}:")
-        cluster_diseases = [disease_names[i] for i in range(len(clusters)) if clusters[i] == k]
-        # Get prevalence for each disease
-        prevalences = Y_avg[:, clusters == k].mean(dim=0)
-        
-        for disease, prev in zip(cluster_diseases, prevalences):
-            print(f"  - {disease} (prevalence: {prev:.4f})")
-    
-    print("\nHealthy State (Topic {self.K-1})")
