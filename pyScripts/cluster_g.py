@@ -127,29 +127,10 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
                 self.K_phi = [K + jitter * torch.eye(self.T)] * self.K
 
     def forward(self):
-        """
-        Forward pass computing pi from lambda and phi with cluster deviations
-        Returns: pi (N x D x T), theta (N x K x T), phi_prob (K x D x T)
-        """
-        # Print shapes for debugging
-        print("logit_prev_t shape:", self.logit_prev_t.shape)
-        print("psi shape:", self.psi.shape)
-        
-        # Compute theta using softmax over topics (N x K x T)
-        theta = torch.softmax(self.lambda_, dim=1)  # N x K x T
-
-        # Base temporal pattern from GP prior (D x T)
-        mu_dt = self.logit_prev_t  # Temporally smooth baseline
-        
-        # Add cluster deviations to get full phi (K x D x T)
-        phi = mu_dt.unsqueeze(0) + self.psi.unsqueeze(-1)  
-        
-        # Transform to probability space
-        phi_prob = torch.sigmoid(phi)  # K x D x T
-
-        # Compute final pi (N x D x T)
+        theta = torch.softmax(self.lambda_, dim=1)
+        phi = self.logit_prev_t.unsqueeze(0) + self.psi.unsqueeze(-1)
+        phi_prob = torch.sigmoid(phi)
         pi = torch.einsum('nkt,kdt->ndt', theta, phi_prob)
-
         return pi, theta, phi_prob
 
     def compute_loss(self, event_times):
@@ -272,6 +253,8 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
         patience_counter = 0
         prev_loss = float('inf')
         
+        print("Starting training...")
+        
         for epoch in range(num_epochs):
             optimizer.zero_grad()
             
@@ -281,44 +264,30 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
             history['loss'].append(loss_val)
             loss.backward()
             
-            # Track gradients
+            # Track metrics silently
             history['max_grad_lambda'].append(self.lambda_.grad.abs().max().item())
             history['max_grad_phi'].append(self.phi.grad.abs().max().item())
             history['max_grad_gamma'].append(self.gamma.grad.abs().max().item())
             history['max_grad_psi'].append(self.psi.grad.abs().max().item())
-
-            # Track condition numbers
-            lambda_conds = [torch.linalg.cond(K).item() for K in self.K_lambda]
-            phi_conds = [torch.linalg.cond(K).item() for K in self.K_phi]
-            history['condition_number_lambda'].append(np.mean(lambda_conds))
-            history['condition_number_phi'].append(np.mean(phi_conds))
-
-            # Check convergence
-            loss_change = abs(prev_loss - loss_val)
-            if loss_change < convergence_threshold:
-                print(f"\nConverged at epoch {epoch}. Loss change: {loss_change:.4f}")
-                break
             
-            # Early stopping check
+            # Only print every 100 epochs
+            if epoch % 100 == 0:
+                print(f"Epoch {epoch}, Loss: {loss_val:.4f}")
+            
+            # Early stopping checks
             if loss_val < best_loss:
-                patience_counter = 0
                 best_loss = loss_val
+                patience_counter = 0
             else:
                 patience_counter += 1
                 if patience_counter >= patience:
-                    print(f"\nEarly stopping triggered at epoch {epoch}")
+                    print(f"Early stopping at epoch {epoch}")
                     break
             
-            # Update parameters, don't use clipping
-            #torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
             optimizer.step()
-            # Update parameters and previous loss
-            
             prev_loss = loss_val
-            
-            if epoch % 100 == 0:
-                print(f"Epoch {epoch}, Loss: {loss_val:.4f}")
         
+        print("Training complete!")
         return history
 
     def _print_progress(self, epoch, loss, history):
