@@ -283,32 +283,38 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
             loss_val = loss.item()
             history['loss'].append(loss_val)
             loss.backward()
+
+            
+            
+            # Get gradients
+            grad_lambda = self.lambda_.grad.abs().max().item() if self.lambda_.grad is not None else 0
+            grad_phi = self.phi.grad.abs().max().item() if self.phi.grad is not None else 0
+            grad_gamma = self.gamma.grad.abs().max().item() if self.gamma.grad is not None else 0
+            grad_psi = self.psi.grad.abs().max().item() if self.psi.grad is not None else 0
+            
             
             # Track metrics silently
             history['max_grad_lambda'].append(self.lambda_.grad.abs().max().item())
             history['max_grad_phi'].append(self.phi.grad.abs().max().item())
             history['max_grad_gamma'].append(self.gamma.grad.abs().max().item())
             history['max_grad_psi'].append(self.psi.grad.abs().max().item())
-            
-            # Only print every 100 epochs
-            if epoch % 100 == 0:
-                print(f"Epoch {epoch}, Loss: {loss_val:.4f}")
-            
-            # Early stopping checks
-            if loss_val < best_loss:
-                best_loss = loss_val
-                patience_counter = 0
-            else:
-                patience_counter += 1
-                if patience_counter >= patience:
-                    print(f"Early stopping at epoch {epoch}")
-                    break
-            
+
+            if epoch < 10 or epoch % 10 == 0:
+                print(f"Gradients - Lambda: {grad_lambda:.3e}, Phi: {grad_phi:.3e}, "
+                  f"Gamma: {grad_gamma:.3e}, Psi: {grad_psi:.3e}")
+    
             optimizer.step()
-            prev_loss = loss_val
+            # Optional: Add a time check
+            if epoch == 0:
+                import time
+                start_time = time.time()
+            elif epoch == 1:
+                time_per_epoch = time.time() - start_time
+                estimated_total_time = time_per_epoch * num_epochs
+                print(f"\nEstimated total training time: {estimated_total_time/60:.1f} minutes")
         
-        print("Training complete!")
         return history
+       
     
     def visualize_initialization(self):
         """Visualize all initial parameters and cluster structure"""
