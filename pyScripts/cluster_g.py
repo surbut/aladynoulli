@@ -36,60 +36,76 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
         self.amplitude = 1.0
 
         # Initialize parameters
-        self.initialize_params()
         self.update_kernels()
+        self.initialize_params()
+        
 
          # Will be initialized in initialize_params()
 
-    
-
     def initialize_params(self):
-        """Initialize parameters using SVD and GP priors"""
-        print("Starting initialization...")
-        
-        # First initialize psi with clusters
+        """Initialize parameters with proper temporal variation and cluster structure"""
         Y_avg = torch.mean(self.Y, dim=2)
         Y_corr = torch.corrcoef(Y_avg.T)
         similarity = (Y_corr + 1) / 2
         
-        # Store clusters
+        # Get clusters
         self.clusters = SpectralClustering(n_clusters=self.K-1).fit_predict(similarity.numpy())
         
-        # Initialize psi FIRST and make sure it's assigned
+        # Initialize psi with cluster deviations
         psi_init = torch.zeros((self.K, self.D))
         for k in range(self.K-1):
             cluster_mask = (self.clusters == k)
-            psi_init[k, cluster_mask] = 1.0
-            psi_init[k, ~cluster_mask] = -0.1
-        psi_init[self.K-1, :] = -1.0
-        
-        # Explicitly assign as Parameter
+            psi_init[k, cluster_mask] = 1.0      # Positive deviation for in-cluster
+            psi_init[k, ~cluster_mask] = -0.1    # Small negative for out-of-cluster
+        psi_init[self.K-1, :] = -1.0            # Background state
         self.psi = nn.Parameter(psi_init)
         
-        # Then initialize other parameters
-        self.phi = nn.Parameter(torch.zeros((self.K, self.D, self.T)))
-        self.gamma = nn.Parameter(torch.zeros((self.P, self.K)))
-        self.lambda_ = nn.Parameter(torch.zeros((self.N, self.K, self.T)))
-        
-        # Store cluster members after psi is initialized
-        self.cluster_members = {}
-        for k in range(self.K-1):
-            self.cluster_members[k] = np.where(self.clusters == k)[0]
-        
-        print("Initializing other parameters...")
-        # Initialize other parameters
-        for k in range(self.K):
-            for d in range(self.D):
-                self.phi.data[k, d, :] = self.logit_prev_t[d, :] + self.psi[k, d]
-        
-        # Initialize lambda
+        # Initialize gamma, lambda, and phi with temporal variation
+        gamma_init = torch.zeros((self.P, self.K))
         lambda_init = torch.zeros((self.N, self.K, self.T))
+        phi_init = torch.zeros((self.K, self.D, self.T))  # Add phi initialization
+        
+        # For each state k
         for k in range(self.K-1):
-            cluster_diseases = self.cluster_members[k]
+            # Lambda initialization (unchanged)
+            cluster_diseases = (self.clusters == k)
             base_value = Y_avg[:, cluster_diseases].mean(dim=1)
-            lambda_init[:, k, :] = base_value.unsqueeze(-1).expand(-1, self.T)
-        lambda_init[:, -1, :] = (-Y_avg.mean(dim=1)).unsqueeze(-1).expand(-1, self.T)
+            gamma_init[:, k] = torch.linalg.lstsq(self.G, base_value.unsqueeze(1)).solution.squeeze()
+            
+            # Project through gamma and add GP variation for lambda
+            lambda_means = self.G @ gamma_init[:, k]
+            L_k = torch.linalg.cholesky(self.K_lambda[k])
+            for i in range(self.N):
+                eps = L_k @ torch.randn(self.T)
+                lambda_init[i, k, :] = lambda_means[i] + eps
+            
+            # Add GP variation to phi around (mu + psi)
+            L_phi = torch.linalg.cholesky(self.K_phi[k])
+            for d in range(self.D):
+                mean_phi = self.logit_prev_t[d, :] + psi_init[k, d]  # mu_d + psi_kd
+                eps = L_phi @ torch.randn(self.T)
+                phi_init[k, d, :] = mean_phi + eps
+        
+        # Background state
+        background_mean = -Y_avg.mean(dim=1)
+        gamma_init[:, -1] = torch.linalg.lstsq(self.G, background_mean.unsqueeze(1)).solution.squeeze()
+        lambda_means = self.G @ gamma_init[:, -1]
+        L_k = torch.linalg.cholesky(self.K_lambda[-1])
+        for i in range(self.N):
+            eps = L_k @ torch.randn(self.T)
+            lambda_init[i, -1, :] = lambda_means[i] + eps
+            
+        # Background state phi
+        L_phi = torch.linalg.cholesky(self.K_phi[-1])
+        for d in range(self.D):
+            mean_phi = self.logit_prev_t[d, :] + psi_init[-1, d]
+            eps = L_phi @ torch.randn(self.T)
+            phi_init[-1, d, :] = mean_phi + eps
+        
+        # Store parameters
+        self.gamma = nn.Parameter(gamma_init)
         self.lambda_ = nn.Parameter(lambda_init)
+        self.phi = nn.Parameter(phi_init)
         
         print("Initialization complete!")
 
@@ -128,9 +144,10 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
 
     def forward(self):
         theta = torch.softmax(self.lambda_, dim=1)
-        phi = self.logit_prev_t.unsqueeze(0) + self.psi.unsqueeze(-1)
-        phi_prob = torch.sigmoid(phi)
+        epsilon=1e-8
+        phi_prob = torch.sigmoid(self.phi)
         pi = torch.einsum('nkt,kdt->ndt', theta, phi_prob)
+        pi = torch.clamp(pi, epsilon, 1-epsilon)
         return pi, theta, phi_prob
 
     def compute_loss(self, event_times):
@@ -183,10 +200,12 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
         """
         gp_loss_lambda = 0.0
         gp_loss_phi = 0.0
+        
         for k in range(self.K):
             L_lambda = torch.linalg.cholesky(self.K_lambda[k])
             L_phi = torch.linalg.cholesky(self.K_phi[k])
-            # Lambda GP prior (averaged by N)
+            
+            # Lambda GP prior (unchanged)
             lambda_k = self.lambda_[:, k, :]
             mean_lambda_k = (self.G @ self.gamma[:, k]).unsqueeze(1)
             deviations_lambda = lambda_k - mean_lambda_k
@@ -194,14 +213,15 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
                 dev_i = deviations_lambda[i:i+1].T
                 v_i = torch.cholesky_solve(dev_i, L_lambda)
                 gp_loss_lambda += 0.5 * torch.sum(v_i.T @ dev_i)
-            # Phi GP prior (averaged by D)
-            phi_k = self.phi[k, :, :]
+            
+            # Phi GP prior (updated to include psi)
+            phi_k = self.phi[k]  # D x T
             for d in range(self.D):
-                mean_phi_d = self.logit_prev_t[d, :]
+                mean_phi_d = self.logit_prev_t[d, :] + self.psi[k, d]  # Include psi deviation
                 dev_d = (phi_k[d:d+1, :] - mean_phi_d).T
                 v_d = torch.cholesky_solve(dev_d, L_phi)
                 gp_loss_phi += 0.5 * torch.sum(v_d.T @ dev_d)
-        # Return separately averaged terms
+        
         return gp_loss_lambda / self.N + gp_loss_phi / self.D
         
     def visualize_clusters(self, disease_names):
@@ -289,7 +309,76 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
         
         print("Training complete!")
         return history
-
+    
+    def visualize_initialization(self):
+        """Visualize all initial parameters and cluster structure"""
+        fig = plt.figure(figsize=(20, 15))
+        
+        # 1. Cluster assignments and psi (2 plots)
+        ax1 = plt.subplot(3, 2, 1)
+        cluster_matrix = np.zeros((self.K-1, self.D))
+        for k in range(self.K-1):
+            cluster_matrix[k, self.clusters == k] = 1
+        im1 = ax1.imshow(cluster_matrix, aspect='auto', cmap='binary')
+        ax1.set_title('Cluster Assignments')
+        ax1.set_xlabel('Disease')
+        ax1.set_ylabel('State')
+        plt.colorbar(im1, ax=ax1)
+        
+        ax2 = plt.subplot(3, 2, 2)
+        im2 = ax2.imshow(self.psi.data.numpy(), aspect='auto', cmap='RdBu_r')
+        ax2.set_title('ψ (Cluster Deviations)')
+        ax2.set_xlabel('Disease')
+        ax2.set_ylabel('State')
+        plt.colorbar(im2, ax=ax2)
+        
+        # 2. Lambda trajectories for different states
+        ax3 = plt.subplot(3, 2, 3)
+        for k in range(self.K):
+            # Plot first 3 individuals for each state
+            for i in range(min(3, self.N)):
+                ax3.plot(self.lambda_[i, k, :].data.numpy(), 
+                        alpha=0.7, label=f'Individual {i}, State {k}')
+        ax3.set_title('λ Trajectories (Sample Individuals)')
+        ax3.set_xlabel('Time')
+        ax3.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        
+        # 3. Phi trajectories
+        ax4 = plt.subplot(3, 2, 4)
+        for k in range(self.K):
+            # Plot first 2 diseases for each state
+            for d in range(min(2, self.D)):
+                ax4.plot(self.phi[k, d, :].data.numpy(), 
+                        alpha=0.7, label=f'State {k}, Disease {d}')
+        ax4.set_title('φ Trajectories (Sample Diseases)')
+        ax4.set_xlabel('Time')
+        ax4.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        
+        # 4. Gamma (genetic effects)
+        ax5 = plt.subplot(3, 2, 5)
+        im5 = ax5.imshow(self.gamma.data.numpy(), aspect='auto', cmap='RdBu_r')
+        ax5.set_title('γ (Genetic Effects)')
+        ax5.set_xlabel('State')
+        ax5.set_ylabel('Genetic Component')
+        plt.colorbar(im5, ax=ax5)
+        
+        # 5. Print summary statistics
+        plt.subplot(3, 2, 6)
+        plt.axis('off')
+        stats_text = (
+            f"Parameter Ranges:\n"
+            f"ψ: [{self.psi.data.min():.3f}, {self.psi.data.max():.3f}]\n"
+            f"λ: [{self.lambda_.data.min():.3f}, {self.lambda_.data.max():.3f}]\n"
+            f"φ: [{self.phi.data.min():.3f}, {self.phi.data.max():.3f}]\n"
+            f"γ: [{self.gamma.data.min():.3f}, {self.gamma.data.max():.3f}]\n\n"
+            f"Cluster Sizes:\n"
+        )
+        for k in range(self.K-1):
+            stats_text += f"Cluster {k}: {(self.clusters == k).sum()} diseases\n"
+        plt.text(0.1, 0.9, stats_text, fontsize=10, verticalalignment='top')
+        
+        plt.tight_layout()
+        plt.show()
     def _print_progress(self, epoch, loss, history):
         """Print training progress"""
         print(f"\nEpoch {epoch}")
@@ -299,6 +388,25 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
               f"γ: {history['max_grad_gamma'][-1]:.4f}")
         print(f"Mean condition numbers - λ: {history['condition_number_lambda'][-1]:.2f}, "
               f"φ: {history['condition_number_phi'][-1]:.2f}")
+
+    def debug_scales(self):
+        """Print the scales of different components"""
+        print("\nScales of model components:")
+        print(f"Baseline logit (μ_dt) range: [{self.logit_prev_t.min().item():.3f}, {self.logit_prev_t.max().item():.3f}]")
+        
+        # After forward pass
+        phi = self.logit_prev_t.unsqueeze(0) + self.psi.unsqueeze(-1)
+        print(f"ψ (state deviations) range: [{self.psi.min().item():.3f}, {self.psi.max().item():.3f}]")
+        print(f"φ (logit_prev + psi) range: [{phi.min().item():.3f}, {phi.max().item():.3f}]")
+        
+        # Check probabilities
+        phi_prob = torch.sigmoid(phi)
+        print(f"\nProbabilities after sigmoid:")
+        print(f"P(φ) range: [{phi_prob.min().item():.3e}, {phi_prob.max().item():.3e}]")
+        
+        # Check theta
+        theta = torch.softmax(self.lambda_, dim=1)
+        print(f"θ (mixing proportions) range: [{theta.min().item():.3e}, {theta.max().item():.3e}]")
 
 ## plotting code from here down
 def plot_training_diagnostics(history):
