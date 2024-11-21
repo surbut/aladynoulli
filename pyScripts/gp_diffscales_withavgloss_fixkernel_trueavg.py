@@ -214,7 +214,7 @@ class AladynSurvivalFixedKernelsAvgLoss(nn.Module):
         Fit model with early stopping and parameter monitoring
         """
         optimizer = optim.Adam([
-            {'params': [self.lambda_, self.phi]},
+            {'params': [self.lambda_, self.phi, self.psi]},
             {'params': [self.gamma], 'weight_decay': lambda_reg}
         ], lr=learning_rate)
         
