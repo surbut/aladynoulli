@@ -68,8 +68,8 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
         for k in range(self.K-1):
             cluster_mask = (self.clusters == k)
             psi_init[k, cluster_mask] = 1.0 + 0.1 * torch.randn(cluster_mask.sum())  # In-cluster
-            psi_init[k, ~cluster_mask] = -0.1 + 0.01 * torch.randn((~cluster_mask).sum())  # Out-cluster
-        psi_init[self.K-1, :] = -1.0 + 0.1 * torch.randn(self.D)  # Background state
+            psi_init[k, ~cluster_mask] = -3.0 + 0.01 * torch.randn((~cluster_mask).sum())  # Out-cluster
+        psi_init[self.K-1, :] = -4.6 + 0.1 * torch.randn(self.D)  # Background state
 
         self.psi = nn.Parameter(psi_init)
     
@@ -219,7 +219,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
         # Result: contributes -log(1-pi[n,d,5]) to loss
         loss_no_event = -torch.sum(torch.log(1 - pi) * mask_at_event * (1 - self.Y))
           # Normalize by N (total number of individuals)
-        total_data_loss = (loss_censored + loss_event + loss_no_event) / self.N
+        total_data_loss = (loss_censored + loss_event + loss_no_event) / (self.N * self.D * self.T)
     
         # GP prior loss remains the same
         gp_loss = self.compute_gp_prior_loss()
@@ -259,7 +259,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
                 v_d = torch.cholesky_solve(dev_d, L_phi)
                 gp_loss_phi += 0.5 * torch.sum(v_d.T @ dev_d)
         
-        return gp_loss_lambda / self.N + gp_loss_phi / self.D
+        return gp_loss_lambda / (self.N * self.K * self.T) + gp_loss_phi / (self.K * self.D * self.T)
         
     def visualize_clusters(self, disease_names):
         """

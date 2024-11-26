@@ -173,7 +173,7 @@ class AladynSurvivalFixedKernelsAvgLoss(nn.Module):
         # Result: contributes -log(1-pi[n,d,5]) to loss
         loss_no_event = -torch.sum(torch.log(1 - pi) * mask_at_event * (1 - self.Y))
           # Normalize by N (total number of individuals)
-        total_data_loss = (loss_censored + loss_event + loss_no_event) / self.N
+        total_data_loss = (loss_censored + loss_event + loss_no_event) / (self.N * self.D * self.T)
     
         # GP prior loss remains the same
         gp_loss = self.compute_gp_prior_loss()
@@ -205,7 +205,7 @@ class AladynSurvivalFixedKernelsAvgLoss(nn.Module):
                 v_d = torch.cholesky_solve(dev_d, L_phi)
                 gp_loss_phi += 0.5 * torch.sum(v_d.T @ dev_d)
         # Return separately averaged terms
-        return gp_loss_lambda / self.N + gp_loss_phi / self.D
+        return gp_loss_lambda / (self.N * self.K * self.T) + gp_loss_phi / (self.K * self.D * self.T)
 
 
     def fit(self, event_times, num_epochs=1000, learning_rate=1e-3, lambda_reg=1e-2,
@@ -252,10 +252,15 @@ class AladynSurvivalFixedKernelsAvgLoss(nn.Module):
             history['condition_number_phi'].append(np.mean(phi_conds))
 
             # Check convergence
-            loss_change = abs(prev_loss - loss_val)
-            if loss_change < convergence_threshold:
-                print(f"\nConverged at epoch {epoch}. Loss change: {loss_change:.4f}")
-                break
+            #loss_change = abs(prev_loss - loss_val)
+            #if loss_change < convergence_threshold:
+             #   print(f"\nConverged at epoch {epoch}. Loss change: {loss_change:.4f}")
+              #  break
+
+            rel_change = abs(prev_loss - loss_val) / abs(prev_loss)
+            if rel_change < convergence_threshold:
+                    print(f"\nConverged at epoch {epoch}. Loss change: {loss_change:.4f}")
+                    break
             
             # Early stopping check
             if loss_val < best_loss:
