@@ -7,7 +7,11 @@ from scipy.special import expit
 from scipy.stats import multivariate_normal
 import matplotlib.pyplot as plt
 from sklearn.cluster import SpectralClustering  # Add this import
-
+import numpy as np
+from scipy.stats import multivariate_normal
+from scipy.special import expit, softmax
+import matplotlib.pyplot as plt
+from scipy.special import softmax
 
 class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
     def __init__(self, N, D, T, K, P, G, Y, prevalence_t, disease_names=None):
@@ -219,7 +223,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
         # Result: contributes -log(1-pi[n,d,5]) to loss
         loss_no_event = -torch.sum(torch.log(1 - pi) * mask_at_event * (1 - self.Y))
           # Normalize by N (total number of individuals)
-        total_data_loss = (loss_censored + loss_event + loss_no_event) / (self.N * self.D * self.T)
+        total_data_loss = (loss_censored + loss_event + loss_no_event) / (self.N)
     
         # GP prior loss remains the same
         gp_loss = self.compute_gp_prior_loss()
@@ -259,7 +263,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
                 v_d = torch.cholesky_solve(dev_d, L_phi)
                 gp_loss_phi += 0.5 * torch.sum(v_d.T @ dev_d)
         
-        return gp_loss_lambda / (self.N * self.K * self.T) + gp_loss_phi / (self.K * self.D * self.T)
+        return gp_loss_lambda / (self.N ) + gp_loss_phi / (self.D)
         
     def visualize_clusters(self, disease_names):
         """
@@ -909,7 +913,101 @@ def compute_smoothed_prevalence(Y, window_size=5):
 
 
 
-# When initializing the model:
-#prevalence_t = compute_smoothed_prevalence(Y, window_size=5)
-#model = AladynSurvivalModel(N, D, T, K, P, G, Y, prevalence_t)
 
+def generate_clustered_survival_data(N=1000, D=20, T=50, K=5, P=5):
+    """
+    Generate synthetic data matching our fitted model structure
+    """
+    # Fixed kernel parameters as in the fit
+    lambda_length = T/4
+    phi_length = T/3
+    amplitude = 1.0
+    
+    # Setup time grid
+    time_points = np.arange(T)
+    time_diff = time_points[:, None] - time_points[None, :]
+    K_lambda = amplitude**2 * np.exp(-0.5 * (time_diff**2) / lambda_length**2)
+    K_phi = amplitude**2 * np.exp(-0.5 * (time_diff**2) / phi_length**2)
+    
+        # 1. Generate more realistic baseline trajectories
+    logit_prev_t = np.zeros((D, T))
+    for d in range(D):
+        # Generate different types of diseases
+        base_rate = np.random.choice([
+            np.random.uniform(-6, -5),  # Common (~20%)
+            np.random.uniform(-7, -6),  # Moderate (~10%)
+            np.random.uniform(-9, -7),  # Uncommon (~1-5%)
+            np.random.uniform(-11, -9)  # Rare (<1%)
+        ], p=[0.1, 0.3, 0.4, 0.2])
+        
+        # Add age-dependent increase
+        peak_age = np.random.uniform(25, 40)  # Peak between ages 55-70
+        logit_prev_t[d, :] = base_rate + \
+                            0.15 * time_points - \
+                            0.002 * (time_points - peak_age)**2  # Quadratic term for later-life plateau
+    
+    # 2. Generate cluster assignments
+    clusters = np.zeros(D)
+    diseases_per_cluster = D // K
+    for k in range(K):
+        clusters[k*diseases_per_cluster:(k+1)*diseases_per_cluster] = k
+    
+    # 3. Generate lambda (individual trajectories)
+    G = np.random.randn(N, P)  # Genetic covariates
+    Gamma_k = np.random.randn(P, K)  # Genetic effects
+    lambda_ik = np.zeros((N, K, T))
+    
+    for i in range(N):
+        mean_lambda = G[i] @ Gamma_k  # Individual-specific means
+        for k in range(K):
+            lambda_ik[i,k,:] = multivariate_normal.rvs(
+                mean=mean_lambda[k] * np.ones(T), 
+                cov=K_lambda
+            )
+    
+    # 4. Generate phi with cluster structure
+    phi_kd = np.zeros((K, D, T))
+    psi = np.zeros((K, D))
+    
+    for k in range(K):
+        for d in range(D):
+            # Set cluster-specific offsets
+            if clusters[d] == k:
+                psi[k,d] = 1.0  # In-cluster
+            else:
+                psi[k,d] = -3.0  # Out-cluster
+                
+            # Generate phi around mu_d + psi
+            mean_phi = logit_prev_t[d,:] + psi[k,d]
+            phi_kd[k,d,:] = multivariate_normal.rvs(mean=mean_phi, cov=K_phi)
+    
+    # 5. Compute probabilities
+    theta = softmax(lambda_ik, axis=1)
+    eta = expit(phi_kd)
+    pi = np.einsum('nkt,kdt->ndt', theta, eta)
+    
+    # 6. Generate events
+    Y = np.zeros((N, D, T))
+    event_times = np.full((N, D), T)
+    
+    for n in range(N):
+        for d in range(D):
+            for t in range(T):
+                if Y[n,d,:t].sum() == 0:  # Still at risk
+                    if np.random.rand() < pi[n,d,t]:
+                        Y[n,d,t] = 1
+                        event_times[n,d] = t
+                        break
+    
+    return {
+        'Y': Y,
+        'G': G,
+        'event_times': event_times,
+        'clusters': clusters,
+        'logit_prev_t': logit_prev_t,
+        'theta': theta,
+        'phi': phi_kd,
+        'lambda': lambda_ik,
+        'psi': psi,
+        'pi': pi
+    }

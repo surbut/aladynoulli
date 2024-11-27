@@ -106,10 +106,10 @@ class AladynSurvivalFixedKernelsAvgLoss(nn.Module):
         # Compute kernels with fixed parameters
         K_lambda = self.amplitude ** 2 * torch.exp(-0.5 * sq_dists / (self.lambda_length_scale ** 2))
         K_phi = self.amplitude ** 2 * torch.exp(-0.5 * sq_dists / (self.phi_length_scale ** 2))
-        
+         
         # Add jitter to each kernel
         for K, name in [(K_lambda, 'lambda'), (K_phi, 'phi')]:
-            jitter = 1e-4
+            jitter = 1e-6
             while True:
                 K_test = K + jitter * torch.eye(self.T)
                 cond = torch.linalg.cond(K_test)
@@ -173,7 +173,7 @@ class AladynSurvivalFixedKernelsAvgLoss(nn.Module):
         # Result: contributes -log(1-pi[n,d,5]) to loss
         loss_no_event = -torch.sum(torch.log(1 - pi) * mask_at_event * (1 - self.Y))
           # Normalize by N (total number of individuals)
-        total_data_loss = (loss_censored + loss_event + loss_no_event) / (self.N * self.D * self.T)
+        total_data_loss = (loss_censored + loss_event + loss_no_event) / (self.N)
     
         # GP prior loss remains the same
         gp_loss = self.compute_gp_prior_loss()
@@ -205,7 +205,7 @@ class AladynSurvivalFixedKernelsAvgLoss(nn.Module):
                 v_d = torch.cholesky_solve(dev_d, L_phi)
                 gp_loss_phi += 0.5 * torch.sum(v_d.T @ dev_d)
         # Return separately averaged terms
-        return gp_loss_lambda / (self.N * self.K * self.T) + gp_loss_phi / (self.K * self.D * self.T)
+        return gp_loss_lambda / (self.N) + gp_loss_phi / (self.D)
 
 
     def fit(self, event_times, num_epochs=1000, learning_rate=1e-3, lambda_reg=1e-2,
