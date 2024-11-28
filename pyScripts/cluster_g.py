@@ -12,6 +12,7 @@ from scipy.stats import multivariate_normal
 from scipy.special import expit, softmax
 import matplotlib.pyplot as plt
 from scipy.special import softmax
+import seaborn as sns
 
 class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
     def __init__(self, N, D, T, K, P, G, Y, prevalence_t, disease_names=None):
@@ -45,11 +46,83 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
         self.update_kernels()
         self.initialize_params()
         
-
+    def initialize_params(self, true_psi=None, **kwargs):
+        """Initialize parameters with either true psi from simulation or clustering"""
+        Y_avg = torch.mean(self.Y, dim=2)
+        if true_psi is not None:
+            # Use true psi from simulation
+            self.psi = nn.Parameter(true_psi)
+            print("\nUsing true psi from simulation")
+            
+        else:
+            # Original clustering code
+            Y_avg = torch.mean(self.Y, dim=2)
+            Y_corr = torch.corrcoef(Y_avg.T)
+            similarity = (Y_corr + 1) / 2
+            
+            spectral = SpectralClustering(
+                n_clusters=self.K,
+                assign_labels='kmeans',
+                affinity='precomputed',
+                n_init=10,
+                random_state=42
+            ).fit(similarity.numpy())
+            
+            self.clusters = spectral.labels_
+            
+            # Initialize psi with cluster deviations
+            psi_init = torch.zeros((self.K, self.D))
+            for k in range(self.K):
+                cluster_mask = (self.clusters == k)
+                psi_init[k, cluster_mask] = 1.0 + 0.1 * torch.randn(cluster_mask.sum())
+                psi_init[k, ~cluster_mask] = -3.0 + 0.01 * torch.randn((~cluster_mask).sum())
+            
+            self.psi = nn.Parameter(psi_init)
+            
+            print("\nCluster Sizes:")
+            unique, counts = np.unique(self.clusters, return_counts=True)
+            for k, count in zip(unique, counts):
+                print(f"Cluster {k}: {count} diseases")
+        
+        # Initialize other parameters using the psi (true or clustered)
+        gamma_init = torch.zeros((self.P, self.K))
+        lambda_init = torch.zeros((self.N, self.K, self.T))
+        phi_init = torch.zeros((self.K, self.D, self.T))
+        
+        # Rest of initialization remains the same
+        for k in range(self.K):
+            if true_psi is None:
+                cluster_diseases = (self.clusters == k)
+                base_value = Y_avg[:, cluster_diseases].mean(dim=1)
+            else:
+                # Use diseases with strong psi values for this signature
+                strong_diseases = (true_psi[k] > 0).float()
+                base_value = Y_avg[:, strong_diseases > 0].mean(dim=1)
+                
+            gamma_init[:, k] = torch.linalg.lstsq(self.G, base_value.unsqueeze(1)).solution.squeeze()
+            
+            # Initialize lambda and phi as before
+            lambda_means = self.G @ gamma_init[:, k]
+            L_k = torch.linalg.cholesky(self.K_lambda[k])
+            for i in range(self.N):
+                eps = L_k @ torch.randn(self.T)
+                lambda_init[i, k, :] = lambda_means[i] + eps
+            
+            L_phi = torch.linalg.cholesky(self.K_phi[k])
+            for d in range(self.D):
+                mean_phi = self.logit_prev_t[d, :] + self.psi[k, d]
+                eps = L_phi @ torch.randn(self.T)
+                phi_init[k, d, :] = mean_phi + eps
+        
+        self.gamma = nn.Parameter(gamma_init)
+        self.lambda_ = nn.Parameter(lambda_init)
+        self.phi = nn.Parameter(phi_init)
+        
+        print("Initialization complete!")
     
-
+    """
     def initialize_params(self, clustering_method='hierarchical', **kwargs):
-        """Initialize parameters with proper temporal variation and cluster structure"""
+        Initialize parameters with proper temporal variation and cluster structure
         Y_avg = torch.mean(self.Y, dim=2)
         Y_corr = torch.corrcoef(Y_avg.T)
         similarity = (Y_corr + 1) / 2
@@ -57,7 +130,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
     
         # Perform spectral clustering
         spectral = SpectralClustering(
-            n_clusters=self.K-1,  # One less for background state
+            n_clusters=self.K,  # One less for background state
             assign_labels='kmeans',
             affinity='precomputed',
             n_init=10,
@@ -69,11 +142,11 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
 
         # Initialize psi with cluster deviations
         psi_init = torch.zeros((self.K, self.D))
-        for k in range(self.K-1):
+        for k in range(self.K):
             cluster_mask = (self.clusters == k)
             psi_init[k, cluster_mask] = 1.0 + 0.1 * torch.randn(cluster_mask.sum())  # In-cluster
             psi_init[k, ~cluster_mask] = -3.0 + 0.01 * torch.randn((~cluster_mask).sum())  # Out-cluster
-        psi_init[self.K-1, :] = -4.6 + 0.1 * torch.randn(self.D)  # Background state
+        #psi_init[self.K-1, :] = -4.6 + 0.1 * torch.randn(self.D)  # Background state
 
         self.psi = nn.Parameter(psi_init)
     
@@ -92,7 +165,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
         phi_init = torch.zeros((self.K, self.D, self.T))  # Add phi initialization
         
         # For each state k
-        for k in range(self.K-1):
+        for k in range(self.K):
             # Lambda initialization (unchanged)
             cluster_diseases = (self.clusters == k)
             base_value = Y_avg[:, cluster_diseases].mean(dim=1)
@@ -112,6 +185,8 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
                 eps = L_phi @ torch.randn(self.T)
                 phi_init[k, d, :] = mean_phi + eps
         
+       
+        
         # Background state, absence of disease
         background_mean = -Y_avg.mean(dim=1) 
         gamma_init[:, -1] = torch.linalg.lstsq(self.G, background_mean.unsqueeze(1)).solution.squeeze()
@@ -128,13 +203,14 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
             eps = L_phi @ torch.randn(self.T)
             phi_init[-1, d, :] = mean_phi + eps
         
+        
         # Store parameters
         self.gamma = nn.Parameter(gamma_init)
         self.lambda_ = nn.Parameter(lambda_init)
         self.phi = nn.Parameter(phi_init)
         
         print("Initialization complete!")
-        
+    """      
     def update_kernels(self):
         """Compute fixed covariance matrices"""
         times = torch.arange(self.T, dtype=torch.float32)
@@ -278,7 +354,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
         Y_avg = torch.mean(self.Y, dim=2)
         
         print("\nCluster Assignments:")
-        for k in range(self.K-1):
+        for k in range(self.K):
             print(f"\nCluster {k}:")
             cluster_diseases = [disease_names[i] for i in range(len(self.clusters)) 
                             if self.clusters[i] == k]
@@ -289,7 +365,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
             for disease, prev in zip(cluster_diseases, prevalences):
                 print(f"  - {disease} (prevalence: {prev:.4f})")
         
-        print("\nHealthy State (Topic {self.K-1})")
+        #print("\nHealthy State (Topic {self.K-1})")
 
 
     def fit(self, event_times, num_epochs=1000, learning_rate=1e-3, lambda_reg=1e-2,
@@ -551,8 +627,8 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
         
         # 1. Cluster assignments and psi (2 plots)
         ax1 = plt.subplot(3, 2, 1)
-        cluster_matrix = np.zeros((self.K-1, self.D))
-        for k in range(self.K-1):
+        cluster_matrix = np.zeros((self.K, self.D))
+        for k in range(self.K):
             cluster_matrix[k, self.clusters == k] = 1
         im1 = ax1.imshow(cluster_matrix, aspect='auto', cmap='binary')
         ax1.set_title('Cluster Assignments')
@@ -608,7 +684,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
             f"γ: [{self.gamma.data.min():.3f}, {self.gamma.data.max():.3f}]\n\n"
             f"Cluster Sizes:\n"
         )
-        for k in range(self.K-1):
+        for k in range(self.K):
             stats_text += f"Cluster {k}: {(self.clusters == k).sum()} diseases\n"
         plt.text(0.1, 0.9, stats_text, fontsize=10, verticalalignment='top')
         
@@ -932,20 +1008,34 @@ def generate_clustered_survival_data(N=1000, D=20, T=50, K=5, P=5):
         # 1. Generate more realistic baseline trajectories
     logit_prev_t = np.zeros((D, T))
     for d in range(D):
-        # Generate different types of diseases
+        # More diverse base rates
         base_rate = np.random.choice([
-            np.random.uniform(-6, -5),  # Common (~20%)
-            np.random.uniform(-7, -6),  # Moderate (~10%)
-            np.random.uniform(-9, -7),  # Uncommon (~1-5%)
-            np.random.uniform(-11, -9)  # Rare (<1%)
-        ], p=[0.1, 0.3, 0.4, 0.2])
+            #np.random.uniform(-18, -16),  # Very rare
+            #np.random.uniform(-16, -14),  # Rare
+            np.random.uniform(-14, -12),  # Uncommon
+            np.random.uniform(-12, -10),  # Moderate
+            np.random.uniform(-10, -8),   # Common
+            np.random.uniform(-8, -6)     # Very common
+        ], p=[0.40, 0.40, 0.15, 0.05])
         
-        # Add age-dependent increase
-        peak_age = np.random.uniform(25, 40)  # Peak between ages 55-70
+        # More diverse trajectory shapes
+        peak_age = np.random.uniform(20, 40)  # Wider range for peak
+        # Reduce slope range
+        slope = np.random.uniform(0.10, 0.4)  # More modest increase
+
+# Increase decay to ensure prevalence plateaus
+        decay = np.random.uniform(0.002, 0.01)
+        
+        # Add possibility of early vs late onset patterns
+        onset_shift = np.random.uniform(-10, 10)
+        time_points_shifted = time_points - onset_shift
+        
+        # Generate trajectory with more complex patterns
         logit_prev_t[d, :] = base_rate + \
-                            0.15 * time_points - \
-                            0.002 * (time_points - peak_age)**2  # Quadratic term for later-life plateau
-    
+                            slope * time_points_shifted - \
+                            decay * (time_points_shifted - peak_age)**2 #+ \
+                           # np.random.normal(0, 0.5, T)  # Add some noise
+        
     # 2. Generate cluster assignments
     clusters = np.zeros(D)
     diseases_per_cluster = D // K
@@ -1011,3 +1101,62 @@ def generate_clustered_survival_data(N=1000, D=20, T=50, K=5, P=5):
         'psi': psi,
         'pi': pi
     }
+
+
+def plot_synthetic_components(data, num_samples=5):
+    plt.figure(figsize=(20, 12))
+    
+    # 1. Plot sample phi trajectories for each cluster
+    plt.subplot(231)
+    for k in range(data['phi'].shape[0]):  # For each cluster
+        for d in range(min(num_samples, data['phi'].shape[1])):  # Sample diseases
+            plt.plot(data['phi'][k,d,:], alpha=0.5, label=f'Cluster {k}' if d==0 else '')
+    plt.title('Sample φ Trajectories by Cluster')
+    plt.xlabel('Time')
+    plt.ylabel('φ Value')
+    plt.legend()
+    
+    # 2. Plot sample lambda trajectories
+    plt.subplot(232)
+    for i in range(min(num_samples, data['lambda'].shape[0])):  # Sample individuals
+        for k in range(data['lambda'].shape[1]):  # For each cluster
+            plt.plot(data['lambda'][i,k,:], alpha=0.5, label=f'Cluster {k}' if i==0 else '')
+    plt.title('Sample λ Trajectories')
+    plt.xlabel('Time')
+    plt.ylabel('λ Value')
+    plt.legend()
+    
+    # 3. Plot psi heatmap
+    plt.subplot(233)
+    sns.heatmap(data['psi'], cmap='RdBu_r', center=0)
+    plt.title('ψ Values (Cluster-Disease Assignment)')
+    plt.xlabel('Disease')
+    plt.ylabel('Cluster')
+    
+     # 4. Plot sample theta (signature weights) as bars instead of lines
+    plt.subplot(234)
+    width = 0.15  # Width of bars
+    x = np.arange(data['theta'].shape[1])  # Cluster indices
+    
+    for i in range(min(num_samples, data['theta'].shape[0])):
+        plt.bar(x + i*width, data['theta'][i,:,0], 
+               width, alpha=0.5, label=f'Individual {i}')
+    
+    plt.title('Sample θ Values (t=0)')
+    plt.xlabel('Cluster')
+    plt.ylabel('Weight')
+    plt.legend()
+    plt.xticks(x + width*2, [f'Cluster {i}' for i in x])
+    
+    # 5. Plot sample pi trajectories
+    plt.subplot(235)
+    for i in range(min(num_samples, data['pi'].shape[0])):
+        for d in range(min(3, data['pi'].shape[1])):
+            plt.plot(data['pi'][i,d,:], alpha=0.5, label=f'Ind {i}, Disease {d}' if i==0 else '')
+    plt.title('Sample π Trajectories')
+    plt.xlabel('Time')
+    plt.ylabel('Probability')
+    plt.yscale('log')
+    
+    plt.tight_layout()
+    plt.show()
