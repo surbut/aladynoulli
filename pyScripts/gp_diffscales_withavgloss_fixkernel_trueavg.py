@@ -252,15 +252,17 @@ class AladynSurvivalFixedKernelsAvgLoss(nn.Module):
             history['condition_number_phi'].append(np.mean(phi_conds))
 
             # Check convergence
-            #loss_change = abs(prev_loss - loss_val)
-            #if loss_change < convergence_threshold:
-             #   print(f"\nConverged at epoch {epoch}. Loss change: {loss_change:.4f}")
-              #  break
+            loss_change = abs(prev_loss - loss_val)
+            if loss_change < convergence_threshold:
+                print(f"\nConverged at epoch {epoch}. Loss change: {loss_change:.4f}")
+                break
 
+            """
             rel_change = abs(prev_loss - loss_val) / abs(prev_loss)
             if rel_change < convergence_threshold:
                     print(f"\nConverged at epoch {epoch}. Loss change: {loss_change:.4f}")
                     break
+            """
             
             # Early stopping check
             if loss_val < best_loss:
