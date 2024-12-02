@@ -97,10 +97,12 @@ class AladynSurvivalFixedKernelsAvgLoss_clust(nn.Module):
             else:
                 # Use diseases with strong psi values for this signature
                 strong_diseases = (true_psi[k] > 0).float()
+                # 1. Get average probability for diseases in this cluster
+
                 base_value = Y_avg[:, strong_diseases > 0].mean(dim=1)
-                
+            # 2. Find genetic effects (gamma) that best predict these cluster probabilities
             gamma_init[:, k] = torch.linalg.lstsq(self.G, base_value.unsqueeze(1)).solution.squeeze()
-            
+            # Solving: G @ gamma ≈ base_value
             # Initialize lambda and phi as before
             lambda_means = self.G @ gamma_init[:, k]
             L_k = torch.linalg.cholesky(self.K_lambda[k])
