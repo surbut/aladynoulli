@@ -373,7 +373,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit(nn.Module):
         #print("\nHealthy State (Topic {self.K-1})")
 
 
-    def fit(self, event_times, num_epochs=1000, learning_rate=1e-3, lambda_reg=1e-2,
+    def fit(self, event_times, num_epochs=1000, learning_rate=1e-4, lambda_reg=1e-2,
         convergence_threshold=1e-3, patience=10):
         """
         Fit model with early stopping and parameter monitoring
@@ -478,6 +478,106 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit(nn.Module):
                 estimated_total_time = time_per_epoch * num_epochs
                 print(f"\nEstimated total training time: {estimated_total_time/60:.1f} minutes")
     
+        return history
+    
+    def fit_efficient(self, event_times, num_epochs=1000, learning_rate=1e-4, lambda_reg=1e-2,
+                 param_change_threshold=1e-5, consecutive_threshold=3):
+        """
+        Efficient fitting with parameter change monitoring
+        Args:
+            param_change_threshold: threshold for parameter changes
+            consecutive_threshold: number of consecutive small changes before stopping
+        """
+        optimizer = optim.Adam([
+            {'params': [self.lambda_, self.phi], 'lr': learning_rate},
+            {'params': [self.psi], 'lr': learning_rate},
+            {'params': [self.gamma], 'weight_decay': lambda_reg, 'lr': learning_rate}
+        ])
+        
+        history = {
+            'loss': [],
+            'param_changes': [],
+            'gradients': []
+        }
+        
+        consecutive_small_changes = 0
+        print("Starting efficient training...")
+        
+        # Store initial parameter values
+        old_params = {
+            'lambda': self.lambda_.detach().clone(),
+            'phi': self.phi.detach().clone(),
+            'psi': self.psi.detach().clone(),
+            'gamma': self.gamma.detach().clone()
+        }
+        
+        for epoch in range(num_epochs):
+            optimizer.zero_grad()
+            
+            # Compute loss and backprop
+            loss = self.compute_loss(event_times)
+            loss_val = loss.item()
+            history['loss'].append(loss_val)
+            loss.backward()
+            
+            # Track parameter changes every 5 epochs
+            if epoch % 5 == 0:
+                param_changes = {
+                    'lambda': (self.lambda_ - old_params['lambda']).abs().mean().item(),
+                    'phi': (self.phi - old_params['phi']).abs().mean().item(),
+                    'psi': (self.psi - old_params['psi']).abs().mean().item(),
+                    'gamma': (self.gamma - old_params['gamma']).abs().mean().item()
+                }
+                
+                max_change = max(param_changes.values())
+                history['param_changes'].append(param_changes)
+                
+                # Print progress every 10 epochs
+                if epoch % 10 == 0:
+                    print(f"\nEpoch {epoch}")
+                    print(f"Loss: {loss_val:.4f}")
+                    print(f"Max parameter change: {max_change:.2e}")
+                    
+                    # Store gradients for monitoring
+                    if self.lambda_.grad is not None:
+                        grads = {
+                            'lambda': self.lambda_.grad.abs().max().item(),
+                            'phi': self.phi.grad.abs().max().item(),
+                            'psi': self.psi.grad.abs().max().item(),
+                            'gamma': self.gamma.grad.abs().max().item()
+                        }
+                        history['gradients'].append(grads)
+                        print(f"Max gradients: {grads}")
+                
+                # Check for convergence based on parameter changes
+                if max_change < param_change_threshold:
+                    consecutive_small_changes += 1
+                    if consecutive_small_changes >= consecutive_threshold:
+                        print(f"\nParameters stabilized at epoch {epoch}")
+                        print(f"Final loss: {loss_val:.4f}")
+                        break
+                else:
+                    consecutive_small_changes = 0
+                
+                # Update old parameters
+                old_params = {
+                    'lambda': self.lambda_.detach().clone(),
+                    'phi': self.phi.detach().clone(),
+                    'psi': self.psi.detach().clone(),
+                    'gamma': self.gamma.detach().clone()
+                }
+            
+            optimizer.step()
+            
+            # Time estimate on first epoch
+            if epoch == 0:
+                import time
+                start_time = time.time()
+            elif epoch == 1:
+                time_per_epoch = time.time() - start_time
+                estimated_total_time = time_per_epoch * num_epochs
+                print(f"\nEstimated total training time: {estimated_total_time/60:.1f} minutes")
+        
         return history
     
     def check_gp_kernels(self):
