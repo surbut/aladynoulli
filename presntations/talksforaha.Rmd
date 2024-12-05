@@ -22,7 +22,7 @@ library(dplyr)
 library(viridis)
 
 
-Y=readRDS("~/Dropbox (Personal)/icd10phe_lab.rds")
+Y_sum_df=readRDS("~/Dropbox (Personal)/icd10phe_lab.rds")
 
 Y_sum_df=merge(Y_sum_df,ATM::disease_info_phecode_icd10[,c("phecode","phenotype","exclude_name")],by.x="names",by.y="phecode")
 Y_sum_df$names=rownames(Y_sum)
@@ -108,7 +108,7 @@ plot_summed_events <- function(Y, title = "Total Disease Events Over Time") {
 }
 
 #Example usage:
-Y_sum <- apply(Y, c(2,3), sum)
+Y_sum <- apply(Y2, c(2,3), sum)
 p <- plot_summed_events(Y)
 print(p)
 ggsave("disease_events_sum.pdf", p, width = 12, height = 6, dpi = 300)
@@ -269,14 +269,16 @@ library(viridis)
 plot_top_diseases <- function(Y_sum_df, n_diseases = 5) {
   # Calculate total cases for each disease
   disease_totals <- Y_sum_df %>%
-    select(-Group, -Pheno, -phecode) %>%  # Remove non-numeric columns
+    select(-Group, -phenotype, -diag_icd10) %>%  # Remove non-numeric columns
     mutate(total = rowSums(.)) %>%
-    bind_cols(Y_sum_df %>% select(Pheno, Group, phecode)) %>%
+    bind_cols(Y_sum_df %>% select(phenotype, Group, diag_icd10)) %>%
     arrange(desc(total))
   
   # Get top n diseases
   top_diseases <- disease_totals %>%
     head(n_diseases)
+  
+  top_diseases=disease_totals[disease_totals$phenotype %in% c("Coronary athrosclerosis","Myocardial infarction","Heart failure NOS"),]
   
   # Reshape data for plotting
   plot_data <- top_diseases %>%
@@ -2304,3 +2306,1004 @@ analyze_disease_patterns <- function(sequences, prs_data, min_transitions = 20) 
 results <- analyze_disease_patterns(sequences, prs_df)
 
 ```
+
+```{r}
+# Load required libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# Function to plot age of onset distributions with overlapping densities
+plot_age_distributions <- function(data) {
+  cv_conditions <- c(
+    "Coronary atherosclerosis",
+    "Myocardial infarction",
+    "Angina pectoris",
+    "Essential hypertension",
+    "Other chronic ischemic heart disease,unspecified"
+  )
+  
+  plot_data <- data %>%
+    filter(phenotype %in% cv_conditions)
+  
+  # Get counts for legend
+  counts <- plot_data %>%
+    group_by(phenotype) %>%
+    summarise(n = n()) %>%
+    mutate(legend_label = paste0(phenotype, " (n=", format(n, big.mark=","), ")"))
+  
+  # Create mapping of old to new labels
+  label_map <- setNames(counts$legend_label, counts$phenotype)
+  
+  # Create the plot
+  ggplot(plot_data, aes(x = age_diag, y = phenotype, fill = phenotype)) +
+    geom_density_ridges(alpha = 0.2) +
+    scale_x_continuous(limits = c(40, 80), breaks = seq(40, 80, by = 10)) +
+    scale_color_brewer(palette = "Set2", labels = label_map) +
+    scale_fill_brewer(palette = "Set2", labels = label_map) +
+    labs(
+      title = "Age of Onset Distribution for Cardiovascular Conditions",
+      x = "Age of Onset",
+      y = "Density",
+      color = "Condition",
+      fill = "Condition"
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = "right",
+      plot.title = element_text(hjust = 0.5, size = 14),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 12),
+      legend.text = element_text(size = 10)
+    )
+}
+
+# Function to create summary statistics table
+summarize_ages <- function(data) {
+  data %>%
+    group_by(phenotype) %>%
+    summarise(
+      n = n(),
+      mean_age = mean(age_diag, na.rm = TRUE),
+      median_age = median(age_diag, na.rm = TRUE),
+      q25 = quantile(age_diag, 0.25, na.rm = TRUE),
+      q75 = quantile(age_diag, 0.75, na.rm = TRUE)
+    ) %>%
+    mutate(
+      IQR = paste(round(q25, 1), "-", round(q75, 1)),
+      mean_age = round(mean_age, 1),
+      median_age = round(median_age, 1)
+    ) %>%
+    select(phenotype, n, mean_age, median_age, IQR) %>%
+    arrange(mean_age)  # Sort by mean age
+}
+
+# Example usage:
+# data <- read.csv("your_data.csv")
+# 
+# # Create and save the plot
+ p <- plot_age_distributions(data)
+# ggsave("age_distributions.pdf", p, width = 10, height = 6)
+# 
+# # Get summary statistics
+# summary_stats <- summarize_ages(data)
+# print(summary_stats)
+
+# Alternative version with individual facets
+plot_age_distributions_faceted <- function(data) {
+  cv_conditions <- c(
+    "Coronary atherosclerosis",
+    "Myocardial infarction",
+    "Angina pectoris",
+    "Essential hypertension",
+    "Other chronic ischemic heart disease,unspecified"
+  )
+  
+  plot_data <- data %>%
+    filter(phenotype %in% cv_conditions)
+  
+  # Get counts for annotations
+  counts <- plot_data %>%
+    group_by(phenotype) %>%
+    summarise(
+      n = n(),
+      median = median(age_diag),
+      mean = mean(age_diag)
+    ) %>%
+    mutate(
+      count_label = paste0("n=", format(n, big.mark=",")),
+      stat_label = paste0("Mean: ", round(mean,1), "\nMedian: ", round(median,1))
+    )
+  
+  ggplot(plot_data, aes(x = age_diag)) +
+    geom_density_ridges(fill = "blue", alpha = 0.5) +
+    facet_wrap(~phenotype, ncol = 1, scales = "free_y") +
+    geom_text(
+      data = counts,
+      aes(x = 75, y = Inf, label = count_label),
+      hjust = 1, vjust = 2
+    ) +
+    geom_text(
+      data = counts,
+      aes(x = 75, y = Inf, label = stat_label),
+      hjust = 1, vjust = 4
+    ) +
+    scale_x_continuous(limits = c(40, 80), breaks = seq(40, 80, by = 10)) +
+    labs(
+      title = "Age of Onset Distribution for Cardiovascular Conditions",
+      x = "Age of Onset",
+      y = "Density"
+    ) +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(size = 12, face = "bold"),
+      plot.title = element_text(hjust = 0.5, size = 14),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 12)
+    )
+}
+```
+
+```{r}
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(purrr)
+
+create_signature_plots <- function() {
+  # Define cardiovascular diseases with exact colors
+  diseases_cv <- tibble(
+    Disease = c(
+      "Myocardial infarction",
+      "Essential hypertension",
+      "Congestive heart failure",
+      "Atrial fibrillation",
+      "Angina pectoris"
+    ),
+    Peak_Age = c(55, 45, 60, 65, 50),
+    Color = c(
+      "#2196F3",  # Blue for MI
+      "#4CAF50",  # Green for HTN
+      "#F44336",  # Red for CHF
+      "#9C27B0",  # Purple for AF
+      "#FF9800"   # Orange for Angina
+    )
+  )
+
+  # Define neoplastic diseases with exact colors
+  diseases_neo <- tibble(
+    Disease = c(
+      "Secondary malignancy",
+      "Neutropenia",
+      "Malignant neoplasm of breast",
+      "Cancer of bronchus/lung"
+    ),
+    Peak_Age = c(60, 55, 58, 65),
+    Color = c(
+      "#E91E63",  # Pink for Secondary
+      "#795548",  # Brown for Neutropenia
+      "#F44336",  # Red for Breast
+      "#9E9E9E"   # Grey for Lung
+    )
+  )
+```
+
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(purrr)
+
+create_signature_plots <- function() {
+  # Define cardiovascular diseases with exact colors
+  diseases_cv <- tibble(
+    Disease = c(
+      "Myocardial infarction",
+      "Essential hypertension",
+      "Congestive heart failure",
+      "Atrial fibrillation",
+      "Angina pectoris"
+    ),
+    Peak_Age = c(55, 45, 60, 65, 50),
+    Color = c(
+      "#2196F3",  # Blue for MI
+      "#4CAF50",  # Green for HTN
+      "#F44336",  # Red for CHF
+      "#9C27B0",  # Purple for AF
+      "#FF9800"   # Orange for Angina
+    )
+  )
+
+  # Define neoplastic diseases with exact colors
+  diseases_neo <- tibble(
+    Disease = c(
+      "Secondary malignancy",
+      "Neutropenia",
+      "Malignant neoplasm of breast",
+      "Cancer of bronchus/lung"
+    ),
+    Peak_Age = c(60, 55, 58, 65),
+    Color = c(
+      "#E91E63",  # Pink for Secondary
+      "#795548",  # Brown for Neutropenia
+      "#F44336",  # Red for Breast
+      "#9E9E9E"   # Grey for Lung
+    )
+  )
+
+  # Function to generate probability progression
+  generate_probs <- function(peak_age, max_prob = 0.95, steepness = 0.2) {
+    age_points <- seq(35, 75, by = 10)  # Adjust for 5 time points
+    age_points %>%
+      map_dbl(~{
+        base_prob <- max_prob * exp(-steepness * (. - peak_age)^2 / 100)
+        if (. >= peak_age - 10) max(0, base_prob) else max(0, base_prob)
+      })
+  }
+
+  # Function to create plot data
+  create_plot_data <- function(diseases) {
+    age_points <- seq(35, 75, by = 10)  # 5 time points
+    
+    diseases %>%
+      group_by(Disease, Color, Peak_Age) %>%
+      summarise(
+        TimePoint = list(age_points),
+        Probabilities = list(generate_probs(Peak_Age))
+      ) %>%
+      unnest(cols = c(TimePoint, Probabilities)) %>%
+      group_by(Disease) %>%
+      mutate(TimeIndex = row_number())
+  }
+
+  # Generate plot data
+  cv_data <- create_plot_data(diseases_cv)
+  neo_data <- create_plot_data(diseases_neo)
+
+  # Function to create signature plot
+  create_signature_plot <- function(data, title) {
+    ggplot(data, aes(y = reorder(Disease, desc(Peak_Age)))) +
+      # Add horizontal lines
+      geom_segment(aes(x = min(TimePoint), xend = max(TimePoint), 
+                      y = Disease, yend = Disease),
+                  color = "gray80", size = 0.3) +
+      # Add filled circles with outline
+      geom_point(aes(x = TimePoint, fill = Disease,
+                     size = Probabilities, alpha = Probabilities),
+                 shape = 21, stroke = 0.5, color = Color) +  # white outline
+      geom_point(aes(x = TimePoint, color = Disease,
+                     size = Probabilities),
+                 alpha = 1) +  # filled circles
+      # Add probability labels
+      geom_text(aes(x = TimePoint, label = sprintf("φ%d%d", TimeIndex, 
+                    as.numeric(factor(Disease)))),
+                size = 2.5, vjust = 2.2, color = "black") +
+      scale_size_continuous(range = c(8, 15),  # Larger circles
+                           breaks = c(0.00, 0.25, 0.50, 0.75, 0.95)) +
+      scale_alpha_continuous(range = c(0.3, 1),
+                           breaks = c(0.00, 0.25, 0.50, 0.75, 0.95)) +
+      scale_color_manual(values = data$Color) +
+      scale_fill_manual(values = data$Color) +
+      scale_x_continuous(breaks = seq(35, 75, by = 10),
+                        limits = c(35, 75)) +
+      labs(title = title,
+           x = "Age",
+           y = "",
+           size = "Probability",
+           alpha = "Probability",
+           color = "Disease",
+           fill = "Disease") +
+      theme_minimal() +
+      theme(
+        panel.grid.minor = element_blank(),
+        panel.grid.major.y = element_blank(),
+        legend.position = "bottom",
+        legend.box = "vertical",
+        plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+        plot.margin = margin(t = 5, r = 10, b = 5, l = 5),
+        legend.title = element_text(size = 10),
+        legend.text = element_text(size = 8)
+      )
+  }
+
+  # Create probability scale legend
+  prob_scale <- tibble(
+    label = c("0.00", "0.25", "0.50", "0.75", "0.95"),
+    size = c(0.00, 0.25, 0.50, 0.75, 0.95)
+  )
+  
+  prob_legend <- ggplot(prob_scale, aes(x = 1:5, y = 1)) +
+    geom_point(aes(size = size),
+               color = "#666666",
+               fill = "#666666",
+               alpha = seq(0.3, 1, length.out = 5)) +
+    scale_size_continuous(range = c(8, 15)) +
+    scale_x_continuous(breaks = 1:5, labels = prob_scale$label) +
+    labs(x = "Probability Scale") +
+    theme_void() +
+    theme(
+      axis.text.x = element_text(),
+      legend.position = "none"
+    )
+
+  # Create both plots
+  cv_plot <- create_signature_plot(cv_data, "Cardiovascular Disease Progression")
+  neo_plot <- create_signature_plot(neo_data, "Neoplastic Disease Progression")
+
+  return(list(
+    cv_plot = cv_plot, 
+    neo_plot = neo_plot, 
+    prob_legend = prob_legend
+  ))
+}
+
+# Example usage:
+# plots <- create_signature_plots()
+# ggsave("cardiovascular_progression.pdf", plots$cv_plot, width = 10, height = 5)
+# ggsave("neoplastic_progression.pdf", plots$neo_plot, width = 10, height = 4)
+# ggsave("probability_legend.pdf", plots$prob_legend, width = 6, height = 1)
+plots <- create_signature_plots()
+```
+
+
+```{r}
+
+  # Define cardiovascular diseases with exact colors
+  diseases_cv <- tibble(
+    Disease = c(
+      "Myocardial infarction",
+      "Essential hypertension",
+      "Atrial fibrillation",
+      "Angina pectoris"
+    ),
+    Peak_Age = c(55, 45, 60, 65, 50),
+    Color = c(
+      "#2196F3",  # Blue for MI
+      "#4CAF50",  # Green for HTN
+      "#F44336",  # Red for CHF
+      "#9C27B0",  # Purple for AF
+      "#FF9800"   # Orange for Angina
+    )
+  )
+
+  # Define neoplastic diseases with exact colors
+  diseases_neo <- tibble(
+    Disease = c(
+      "Secondary malignancy",
+      "Neutropenia",
+      "Malignant neoplasm of breast",
+      "Cancer of bronchus/lung"
+    ),
+    Peak_Age = c(60, 55, 58, 65),
+    Color = c(
+      "#E91E63",  # Pink for Secondary
+      "#795548",  # Brown for Neutropenia
+      "#F44336",  # Red for Breast
+      "#9E9E9E"   # Grey for Lung
+    )
+  )
+
+  # Function to generate probability progression
+  generate_probs <- function(peak_age, max_prob = 0.95, steepness = 0.2) {
+    age_points <- seq(35, 75, by = 10)  # Adjust for 5 time points
+    age_points %>%
+      map_dbl(~{
+        base_prob <- max_prob * exp(-steepness * (. - peak_age)^2 / 100)
+        if (. >= peak_age - 10) max(0, base_prob) else max(0, base_prob)
+      })
+  }
+
+  # Function to create plot data
+  create_plot_data <- function(diseases) {
+    age_points <- seq(35, 75, by = 10)  # 5 time points
+    
+    diseases %>%
+      group_by(Disease, Color, Peak_Age) %>%
+      summarise(
+        TimePoint = list(age_points),
+        Probabilities = list(generate_probs(Peak_Age))
+      ) %>%
+      unnest(cols = c(TimePoint, Probabilities)) %>%
+      group_by(Disease) %>%
+      mutate(TimeIndex = row_number())
+  }
+
+  # Generate plot data
+  cv_data <- create_plot_data(diseases_cv)
+  neo_data <- create_plot_data(diseases_neoplastic)
+
+                               create_signature_plot <- function(data, title) {
+                                 ggplot(data, aes(y = reorder(Disease, desc(Peak_Age)))) +
+                                   # Add horizontal lines
+                                   geom_segment(
+                                     aes(
+                                       x = min(TimePoint),
+                                       xend = max(TimePoint),
+                                       y = Disease,
+                                       yend = Disease
+                                     ),
+                                     color = "gray80",
+                                     size = 0.3
+                                   ) +
+                                   # Single geom_point layer with both fill and color
+                                   geom_point(
+                                     aes(x = TimePoint, size = Probabilities),
+                                     fill = data$Color,
+                                     # Direct color assignment
+                                     color = "white",
+                                     # White outline
+                                     alpha = data$Probabilities,
+                                     # Consistent alpha
+                                     shape = 21,
+                                     # Filled circle with outline
+                                     stroke = 0.5
+                                   ) +       # Outline thickness
+                                   # Add probability labels
+                                   geom_text(
+                                     aes(
+                                       x = TimePoint,
+                                       label = sprintf("φ%d%d", TimeIndex, as.numeric(factor(Disease)))
+                                     ),
+                                     size = 2.5,
+                                     vjust = 2.2,
+                                     color = "black"
+                                   ) +
+                                   scale_size_continuous(range = c(8, 15),
+                                                         breaks = c(0.00, 0.25, 0.50, 0.75, 0.95)) +
+                                   scale_x_continuous(breaks = seq(35, 75, by = 10), limits = c(35, 75)) +
+                                   labs(
+                                     title = title,
+                                     x = "Age",
+                                     y = "",
+                                     size = "Probability"
+                                   ) +
+                                   theme_classic(base_size = 20) +
+                                   theme(
+                                     panel.grid.minor = element_blank(),
+                                     panel.grid.major.y = element_blank(),
+                                     legend.position = "bottom",
+                                     legend.box = "vertical",
+                                     plot.title = element_text(
+                                       hjust = 0.5,
+                                       size = 14,
+                                       face = "bold"
+                                     ),
+                                     plot.margin = margin(
+                                       t = 5,
+                                       r = 10,
+                                       b = 5,
+                                       l = 5
+                                     ),
+                                     legend.title = element_text(size = 10),
+                                     legend.text = element_text(size = 8)
+                                   )
+                               }
+                               
+  
+  
+```
+ 
+ 
+```{r}
+
+  # Function to find matches for one disease
+find_cv_matches <- function(theta, phi, Y, disease_names, 
+                           diseases = c("Coronary atherosclerosis", "Myocardial infarction"),
+                           n_examples = 5) {
+  
+  # Convert phi to probabilities
+  phi_prob <- plogis(phi)
+  
+  # Get dimensions
+  N <- dim(theta)[1]
+  K <- dim(theta)[2]
+  T <- dim(theta)[3]
+  
+  # Find disease indices
+  disease_idx <- match(diseases, disease_names)
+  
+  # Function to find matches for one disease
+  find_disease_matches <- function(d_idx) {
+    disease_name <- disease_names[d_idx]
+    
+    # Find individuals who get this disease
+    disease_cases <- which(rowSums(Y[,d_idx,]) > 0)
+    
+    if(length(disease_cases) == 0) return(NULL)
+    
+    # For each case, compute correlation
+    matches <- lapply(disease_cases, function(i) {
+      # Get time of disease onset - fixed this line
+      onset_time <- which(Y[i,d_idx,] > 0)[1]  # Added > 0 comparison
+      
+      # Compute correlations for each signature
+      sig_corrs <- sapply(1:K, function(k) {
+        # Get data up to onset
+        indiv_theta <- theta[i,k,1:onset_time]
+        disease_phi <- phi_prob[k,d_idx,1:onset_time]
+        cor(indiv_theta, disease_phi)
+      })
+      
+      list(
+        individual = i,
+        disease = d_idx,
+        disease_name = disease_name,
+        onset_time = onset_time,
+        correlations = sig_corrs,
+        max_corr = max(sig_corrs),
+        best_sig = which.max(sig_corrs)
+      )
+    })
+    
+    # Sort by correlation and take top examples
+    matches <- matches[order(sapply(matches, function(x) x$max_corr), decreasing=TRUE)]
+    matches[1:min(n_examples, length(matches))]
+  }
+  
+
+  
+  
+  # Find matches for specified diseases
+  all_matches <- do.call(c, lapply(disease_idx, find_disease_matches))
+  
+  # Plot function for one match
+  plot_match <- function(match) {
+    i <- match$individual
+    d <- match$disease
+    t <- match$onset_time
+    k <- match$best_sig
+    
+       # Create data frames for plotting individual signature loadings
+    theta_df <- melt(theta[i,,], varnames=c("signature", "time")) 
+    theta_df$t=t
+    
+                   individual_prob = matrix(0, nrow = K, ncol = T)
+                   for (k in 1:K) {
+                     for (t in 1:T) {
+                       individual_prob[k, t] <- theta[i, k, t] * phi_prob[k, d, t]
+                     }
+                   }
+     
+    # Best signature comparison
+    best_df <- data.frame(
+      time = 1:T,
+      Individual_Loading = individual_prob[k,],
+      Disease_Probability = phi_prob[k,d,]  # Changed to actual individual probability
+    ) %>%
+      pivot_longer(-time, names_to="type", values_to="value")    
+    # Color palette
+      # Create an extended color palette for K > 8
+  create_palette <- function(n) {
+    if(n <= 8) {
+      return(RColorBrewer::brewer.pal(n, "Set2"))
+    } else {
+      # Use a combination of Set2 and additional colors
+      base_colors <- RColorBrewer::brewer.pal(8, "Set2")
+      # Add more distinct colors if needed
+      extra_colors <- c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+                       "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf")
+      return(c(base_colors, extra_colors)[1:n])
+    }
+  }
+  
+  # Use the new palette
+  sig_colors <- create_palette(K)
+  phi_df$t=t
+  best_df$t=t
+    
+    # Create plots
+    p1 <- ggplot(theta_df, aes(x=time, y=value, color=as.factor(signature))) +
+      geom_line(aes(alpha=ifelse(signature==paste("Signature", k), 1, 0.3)), size=1) +
+      geom_vline(xintercept=t, linetype="dashed", color="red") +
+      scale_color_manual(values=sig_colors) +
+      scale_alpha_identity() +
+      labs(title=paste("Individual", i, "Signature Loadings"),
+           subtitle=paste("Disease:", match$disease_name),
+           y="Loading") +
+      theme_minimal() +
+      theme(legend.position="bottom")
+    
+    p2 <- ggplot(phi_df, aes(x=time, y=value, color=as.factor(signature))) +
+      geom_line(aes(alpha=ifelse(signature==paste("Signature", k), 1, 0.3)), size=1) +
+      geom_vline(xintercept=t, linetype="dashed", color="red") +
+      scale_color_manual(values=sig_colors) +
+      scale_alpha_identity() +
+      labs(title="Disease Probabilities in Signatures",
+           subtitle=paste("Correlation:", round(match$max_corr, 3)),
+           y="Probability") +
+      theme_minimal() +
+      theme(legend.position="bottom")
+    
+    p3 <- ggplot(best_df, aes(x=time, y=value, color=type)) +
+      geom_line(size=1) +
+      geom_vline(xintercept=t, linetype="dashed", color="red") +
+      scale_color_manual(values=c("Individual_Loading"=sig_colors[k], 
+                                 "Disease_Probability"="darkred")) +
+      labs(title=paste("Best Match: Signature", k),
+           y="Value") +
+      theme_minimal() +
+      theme(legend.position="bottom")
+    
+    # Combine plots
+    gridExtra::grid.arrange(p1, p2, p3, ncol=3,
+                           top=grid::textGrob(paste("Disease Trajectory Example:", match$disease_name),
+                                            gp=grid::gpar(fontsize=14, font=2)))
+    
+    # Print match details
+    cat("\nMatch Details:\n")
+    cat("Individual:", i, "\n")
+    cat("Disease:", match$disease_name, "\n")
+    cat("Onset Time:", t, "\n")
+    cat("Best Signature:", k, "\n")
+    cat("Correlation:", round(match$max_corr, 3), "\n")
+    cat(paste(rep("=", 50), collapse=""), "\n")
+  }
+  
+  # Plot all matches
+  invisible(lapply(all_matches, plot_match))
+  
+  return(all_matches)
+}
+
+# Usage:
+cv_matches <- find_cv_matches(theta, phi, Y2, disease_names)
+```
+
+```{r}
+find_mi_matches <- function(theta, phi, Y, disease_names, n_examples = 5) {
+  
+  # Convert phi to probabilities
+  phi_prob <- plogis(phi)
+  
+  # Get dimensions
+  N <- dim(theta)[1]
+  K <- dim(theta)[2]
+  T <- dim(theta)[3]
+# Find MI index
+d_idx <- match("Myocardial infarction", disease_names)
+
+# Find individuals who get MI before age 55 (index 25)
+early_mi_cases <- which(apply(Y[,d_idx,1:25], 1, function(x) any(x > 0)))
+
+if(length(early_mi_cases) == 0) {
+  cat("No early MI cases found\n")
+  return(NULL)
+}
+
+# For each case, check if max phi signature matches max theta signature
+matches <- sapply(early_mi_cases, function(i) {
+  # Get time of disease onset (only looking up to age 55)
+  onset_time <- which(Y[i,d_idx,1:25] > 0)[1]
+  
+  # Find signature with max loading for this individual at onset
+  theta_values <- theta[i,,onset_time]
+  max_theta_sig <- which.max(theta_values)
+  
+  # Find signature with max phi for MI at onset
+  phi_values <- phi_prob[,d_idx,onset_time]
+  max_phi_sig <- which.max(phi_values)
+  
+  # Check if they match
+  max_theta_sig == max_phi_sig
+})
+
+# Get the matching cases
+matching_cases <- early_mi_cases[matches]
+
+# Print summary
+cat("Found", length(matching_cases), "early MI cases with matching signatures\n")
+
+
+  # Plot function for one match
+  plot_match <- function(match) {
+    i <- match
+    d <- disease_idx
+    onset_t_name <- as.numeric(as.character(names(which(Y[match,d,]==1))))
+    onset_t=which(Y[match,d,]==1)
+    k <- which.max(theta[i,,onset_t])
+    
+    # Create data frames for plotting individual signature loadings
+    theta_df <- melt(theta[i,,], varnames=c("signature", "time")) 
+    
+    # Create phi_df
+    phi_df <- melt(phi_prob[,d,], varnames=c("signature", "time"))
+    
+    # Calculate individual probabilities
+    individual_prob = matrix(0, nrow = K, ncol = T)
+    for (sig in 1:K) {
+      for (t in 1:T) {
+        individual_prob[sig, t] <- theta[i, sig, t] * phi_prob[sig, d, t]
+      }
+    }
+    
+  
+    # Create color palette
+    create_palette <- function(n) {
+      if(n <= 8) {
+        return(RColorBrewer::brewer.pal(n, "Set2"))
+      } else {
+        base_colors <- RColorBrewer::brewer.pal(8, "Set2")
+        extra_colors <- c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+                         "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf")
+        return(c(base_colors, extra_colors)[1:n])
+      }
+    }
+    sig_colors <- create_palette(K)
+    
+    # Create plots
+    
+    theta_df$time=theta_df$time+30
+    phi_df$time=phi_df$time+30
+    
+    p1 <- ggplot(theta_df, aes(x=time, y=value, color=as.factor(signature))) +
+      geom_line() +
+      geom_vline(xintercept=onset_t_name, linetype="dashed", color="red") +
+      scale_color_manual(values=sig_colors, name="Signature") +
+      #scale_alpha_identity() +
+      labs(title=paste("Individual", i, "Signature Weights"),
+           y="Weight",
+           x="Age") +
+      theme_minimal() +
+      theme(legend.position="bottom")
+    
+    p2 <- ggplot(phi_df, aes(x=time, y=value, color=as.factor(signature))) +
+      geom_line() +
+      geom_vline(xintercept=onset_t_name, linetype="dashed", color="red") +
+      scale_color_manual(values=sig_colors, name="Signature") +
+      #scale_alpha_identity() +
+      labs(title="MI Probabilities by Signature",
+           y="Probability",
+           x="Age") +
+      theme_minimal() +
+      theme(legend.position="bottom")
+    
+       # Combine plots
+    gridExtra::grid.arrange(p1, p2,  ncol=2)
+    
+      }
+  
+  # Plot all matches
+  
+  invisible(lapply(matches, plot_match))
+  
+  return(matches)
+}
+
+# Usage:
+mi_matches <- find_mi_matches(theta, phi, Y, disease_names)
+
+```
+
+```{r}
+at=function(individual_id, Y, G, theta, disease_names_list, prs_names_list, age_range=30:80) {
+  # Get first occurrence of each disease for ordering
+  disease_timeline <- data.frame(
+    disease = disease_names_list,
+    first_occurrence = apply(Y[individual_id,,], 1, function(x) min(which(x == 1)))
+  ) %>%
+    mutate(
+      first_occurrence = ifelse(is.infinite(first_occurrence), Inf, first_occurrence + 30),
+      ever_occurs = first_occurrence < Inf
+    )
+  
+  # Get diseases that occur for this person
+  person_disease <- disease_timeline %>%
+    filter(ever_occurs) %>%
+    arrange(first_occurrence) %>%
+    pull(disease)
+  
+  disease_indices <- match(person_disease, disease_names_list)
+  
+  # 1. Topic trajectories
+  topics_df <- melt(theta_pred[individual_id,,], varnames=c("Topic", "Age")) 
+  topics_df$Age =topics_df$Age+30
+  
+  p1 <- ggplot(topics_df, aes(x = Age, y = value, color = as.factor(Topic))) +
+    geom_line(size = 1) +
+    labs(title = "Signature Trajectories",
+         y = "Topic Weight") +
+    theme_minimal() +
+    theme(legend.position = "right") +
+    scale_color_d3()
+  
+  # 2. Disease events - now ordered by first occurrence
+  diseases_df <- as.data.frame(t(Y[individual_id, disease_indices, ])) %>%
+    setNames(person_disease) %>%
+    mutate(Age = age_range) %>%
+    pivot_longer(-Age, 
+                names_to = "Disease", 
+                values_to = "Status") %>%
+    mutate(Disease = factor(Disease, levels = rev(person_disease)))  # Reverse order for bottom-up timeline
+  
+  p2 <- ggplot(diseases_df, aes(x = Age, y = Disease, fill = as.factor(Status))) +
+    geom_tile() +
+    labs(title = "Disease Events",
+         y = "Disease Status",fill="Status") +
+    theme_minimal() +scale_fill_manual(values = c("0" = "white", "1" = "red"))+
+    theme(legend.position = "right") 
+  
+
+  # 3. Improved genetic risk scores plot
+  genetic_df <- data.frame(t(
+    G[individual_id,]
+  ));
+  genetic_df$PRS=rownames(genetic_df)
+  colnames(genetic_df)=c("Value","PRS")
+  genetic_df=genetic_df%>%mutate(
+      Category = case_when(
+        abs(Value) >= 2 ~ "Very High",
+        abs(Value) >= 1 ~ "High",
+        abs(Value) >= 0.5 ~ "Moderate",
+        TRUE ~ "Low"
+      ),
+      Direction = ifelse(Value >= 0, "Positive", "Negative"))
+    
+  
+  p3 <- ggplot(genetic_df, aes(x = reorder(PRS, abs(Value)), y = Value)) +
+    geom_col(aes(fill = Direction)) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+    geom_hline(yintercept = c(-2, -1, 1, 2), linetype = "dotted", alpha = 0.3) +
+    scale_fill_manual(values = c("Negative" = "darkred", "Positive" = "steelblue")) +
+    labs(title = "Genetic Risk Scores",
+         subtitle = "Dotted lines at ±1 and ±2 SD",
+         y = "PRS Value (SD units)") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "right") +
+    coord_flip()
+  
+grid.arrange(p1, p2, p3, ncol = 3)
+  # Combine plots with adjusted heights
+    #combined_plot <- p1 / p2 / p3 +
+    #plot_layout(heights = c(2, 2, 2)) 
+  
+ 
+}
+```
+
+
+```{r}
+plot_match=
+function(match) {
+    i <- match
+    d <- disease_idx
+    onset_t_name <- as.numeric(as.character(names(which(Y[match,d,]==1))))
+    onset_t=which(Y[match,d,]==1)
+    k <- which.max(theta[i,,onset_t])
+    
+    # Create data frames for plotting individual signature loadings
+    theta_df <- melt(theta[i,,], varnames=c("signature", "time")) 
+    
+    # Create phi_df
+    phi_df <- melt(phi_prob[,d,], varnames=c("signature", "time"))
+    
+    # Calculate individual probabilities
+    individual_prob = matrix(0, nrow = K, ncol = T)
+    for (sig in 1:K) {
+      for (t in 1:T) {
+        individual_prob[sig, t] <- theta[i, sig, t] * phi_prob[sig, d, t]
+      }
+    }
+    
+  
+    # Create color palette
+    create_palette <- function(n) {
+      if(n <= 8) {
+        return(RColorBrewer::brewer.pal(n, "Set2"))
+      } else {
+        base_colors <- RColorBrewer::brewer.pal(8, "Set2")
+        extra_colors <- c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+                         "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf")
+        return(c(base_colors, extra_colors)[1:n])
+      }
+    }
+    sig_colors <- create_palette(K)
+    
+    # Create plots
+    
+    theta_df$time=theta_df$time+30
+    phi_df$time=phi_df$time+30
+    
+    p1 <- ggplot(theta_df, aes(x=time, y=value, color=as.factor(signature))) +
+      geom_line() +
+      geom_vline(xintercept=onset_t_name, linetype="dashed", color="red") +
+      scale_color_manual(values=sig_colors, name="Signature") +
+      #scale_alpha_identity() +
+      labs(title=paste("Individual", i, "Signature Weights"),
+           y="Weight",
+           x="Age") +
+      theme_minimal() +
+      theme(legend.position="bottom")
+    
+    p2 <- ggplot(phi_df, aes(x=time, y=value, color=as.factor(signature))) +
+      geom_line() +
+      geom_vline(xintercept=onset_t_name, linetype="dashed", color="red") +
+      scale_color_manual(values=sig_colors, name="Signature") +
+      #scale_alpha_identity() +
+      labs(title="MI Probabilities by Signature",
+           y="Probability",
+           x="Age") +
+      theme_minimal() +
+      theme(legend.position="bottom")
+    
+    
+    
+    individual_id=i
+     # Get first occurrence of each disease for ordering
+  disease_timeline <- data.frame(
+    disease = disease_names_list,
+    first_occurrence = apply(Y[individual_id,,], 1, function(x) min(which(x == 1)))
+  ) %>%
+    mutate(
+      first_occurrence = ifelse(is.infinite(first_occurrence), Inf, first_occurrence + 30),
+      ever_occurs = first_occurrence < Inf
+    )
+  
+  # Get diseases that occur for this person
+  person_disease <- disease_timeline %>%
+    filter(ever_occurs) %>%
+    arrange(first_occurrence) %>%
+    pull(disease)
+  
+  disease_indices <- match(person_disease, disease_names_list)
+
+  
+  # 2. Disease events - now ordered by first occurrence
+  diseases_df <- as.data.frame(t(Y[individual_id, disease_indices, ])) %>%
+    setNames(person_disease) %>%
+    mutate(Age = age_range) %>%
+    pivot_longer(-Age, 
+                names_to = "Disease", 
+                values_to = "Status") %>%
+    mutate(Disease = factor(Disease, levels = rev(person_disease)))  # Reverse order for bottom-up timeline
+  
+  p3 <- ggplot(diseases_df, aes(x = Age, y = Disease, fill = as.factor(Status))) +
+    geom_tile() +
+    labs(title = "Disease Events",
+         y = "Disease Status",fill="Status") +
+    theme_minimal() +scale_fill_manual(values = c("0" = "white", "1" = "red"))+
+    theme(legend.position = "right") 
+  
+
+  # 3. Improved genetic risk scores plot
+  genetic_df <- data.frame(t(
+    G[individual_id,]
+  ));
+  genetic_df$PRS=rownames(genetic_df)
+  colnames(genetic_df)=c("Value","PRS")
+  genetic_df=genetic_df%>%mutate(
+      Category = case_when(
+        abs(Value) >= 2 ~ "Very High",
+        abs(Value) >= 1 ~ "High",
+        abs(Value) >= 0.5 ~ "Moderate",
+        TRUE ~ "Low"
+      ),
+      Direction = ifelse(Value >= 0, "Positive", "Negative"))
+    
+  
+  p4 <- ggplot(genetic_df, aes(x = reorder(PRS, abs(Value)), y = Value)) +
+    geom_col(aes(fill = Direction)) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+    geom_hline(yintercept = c(-2, -1, 1, 2), linetype = "dotted", alpha = 0.3) +
+    scale_fill_manual(values = c("Negative" = "darkred", "Positive" = "steelblue")) +
+    labs(title = "Genetic Risk Scores",
+         subtitle = "Dotted lines at ±1 and ±2 SD",
+         y = "PRS Value (SD units)") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "right") +
+    coord_flip()
+  
+grid.arrange(p1,p2,p3 ,p4, nrow = 2)
+  # Combine plots with adjusted heights
+    #combined_plot <- p1 / p2 / p3 +
+    #plot_layout(heights = c(2, 2, 2)) 
+}
+    
+    ```
+    
+      }
+ 

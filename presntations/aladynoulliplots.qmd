@@ -164,6 +164,9 @@ for(age in ages) {
 }
 
 
+fr=readRDS("~/Dropbox (Personal)/fr30.rds")
+fr=fr[fr$eid%in%rownames(Y2),]
+
 ```
 
 ```{r}
@@ -283,6 +286,14 @@ mean(results$auc_cox>results$auc_aladyn)
 
 
 ```{r}
+library(survival)
+
+e2=event_times[rownames(event_times)%in%fr$eid,]
+yf=Y2[rownames(Y2)%in%fr$eid,,]
+all.equal(as.character(fr$eid),as.character(rownames(e2)))
+ 
+ 
+disease_name_list=model_data$disease_names
 # Function to fit Cox models and get predicted risks
 fit_cox_models <- function(event_times,
                           event,
@@ -358,10 +369,10 @@ for(age in ages) {
   
   for(d in 1:D) {
     risks <- fit_cox_models(
-      event_times = model_data$event_times[,d]+1,
+      event_times = event_times[,d]+1,
       event = rowSums(Y[,d,time_idx:T]),
-      sex = model_data$metadata$sex,
-      smoke = model_data$metadata$smoke,
+      sex = metadata$sex,
+      smoke = metadata$smoke,
       aladyn_pred = aladyn_risks[[as.character(age)]][,d],
       from_age = time_idx
     )
@@ -414,11 +425,12 @@ for(age in ages) {
 
 
 # Calculate means and SDs
+library(reshape2)
 
 r=melt(results[,c("age","disease_name","auc_basic","auc_aladyn","auc_combined")],id=c("age","disease_name"))
 
-ggplot(r,aes(x=age,y=value,fill=variable))+geom_boxplot()+
-  scale_fill_futurama()+labs(y="AUC Across all Diseases of remaining risk",x="Age",fill="Model")+theme_classic()+theme(axis.text.x = element_text(angle = 90))
+ggplot(r,aes(x=variable,y=value,fill=variable))+geom_boxplot()+
+  scale_fill_futurama()+labs(y="AUC Across all Diseases of remaining risk",x="Model",fill="Model")+theme_classic()+theme(axis.text.x = element_text(angle = 90))
 
 # Create nicer plot
 barplot(means, 
@@ -819,16 +831,11 @@ analyze_individual_trajectory <- function(individual_id, Y, G, theta, disease_na
   disease_indices <- match(person_disease, disease_names_list)
   
   # 1. Topic trajectories
-  topics_df <- as.data.frame(t(theta_pred[individual_id,,])) %>%
-    setNames(paste0("Topic ", 0:9)) %>%
-    mutate(Age = age_range) %>%
-    pivot_longer(-Age, 
-                names_to = "Topic", 
-                values_to = "Weight")
+  topics_df <- melt(theta_pred[individual_id,,], varnames = c("Signature", "Age"), value.name = "Weight") 
   
-  p1 <- ggplot(topics_df, aes(x = Age, y = Weight, color = Topic)) +
+  p1 <- ggplot(topics_df, aes(x = Age, y = Weight, color = as.factor(Signature)))+
     geom_line(size = 1) +
-    labs(title = "Topic Trajectories",
+    labs(title = "Signature Trajectories",
          y = "Topic Weight") +
     theme_minimal() +
     theme(legend.position = "right") +
@@ -880,7 +887,7 @@ analyze_individual_trajectory <- function(individual_id, Y, G, theta, disease_na
           legend.position = "right") +
     coord_flip()
   
-grid.arrange(p1, p2, p3, ncol = 3,widths=c(2,2,2))
+grid.arrange(p1, p2, p3, ncol = 3,widths=c(2,4,2))
   # Combine plots with adjusted heights
     #combined_plot <- p1 / p2 / p3 +
     #plot_layout(heights = c(2, 2, 2)) 
@@ -1958,4 +1965,173 @@ analyze_patient(1, Y, G, theta_pred, gamma_np, disease_names_list,
     trend_test = trend_test
   ))
  }
+```
+
+```{r}
+# First, get top diseases
+get_top_diseases <- function(phi, n_top=10) {
+  mean_loadings <- apply(phi, c(1,2), mean)
+  top_diseases <- lapply(1:dim(phi)[1], function(k) {
+    topic_loadings <- scale(mean_loadings[k,])
+    order(topic_loadings, decreasing=TRUE)[1:n_top]
+  })
+  return(top_diseases)
+}
+
+# Create dataframe for plotting
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+
+# Assuming phi is your K x D x T array
+K <- dim(phi)[1]  # number of topics
+D <- dim(phi)[2]  # number of diseases
+T <- dim(phi)[3]  # number of timepoints
+
+times <- 30:80  # assuming these are your age ranges
+
+# Get top diseases
+top_diseases <- get_top_diseases(phi, 10)
+
+# Create plotting dataframe
+phi_df <- do.call(rbind, lapply(1:K, function(k) {
+  do.call(rbind, lapply(top_diseases[[k]], function(d) {
+    data.frame(
+      topic = factor(paste0("Topic ", k)),
+      disease = factor(disease_names[d]),
+      time = times,
+      loading = phi[k,d,]
+    )
+  }))
+}))
+
+# Create faceted plot
+p1 <- ggplot(phi_df, aes(x=time, y=loading, color=disease)) +
+  geom_line(size=1) +
+  facet_wrap(~topic, scales="free_y", ncol=2) +
+  theme_minimal() +
+  labs(title="Top Disease Trajectories by Topic",
+       x="Age",
+       y="Disease Loading") +
+  theme(legend.position="right",
+        plot.title = element_text(hjust=0.5, size=16),
+        strip.text = element_text(size=12)) +
+  scale_x_continuous(breaks=seq(30, 80, by=10))
+
+print(p1)
+
+Siimlarly, an individual’s relative enrichment in any one of these signatures at a given time 
+
+may change as influenced by genetics, environmental and previous diagnostic history. Characterizing a patient as loaded on ‘one signature’ belies the often complicated and beautiful trajectory of a. patient’s unique story. 
+
+
+which(rowSums(Y[,c(114,111,252),])==3&G$CAD>0&model_data$event_times[,111]<10)
+# Create heatmap
+mean_phi <- apply(phi, c(1,2), mean)
+top_n_all <- unique(unlist(top_diseases))
+
+heatmap_data <- reshape2::melt(mean_phi[,top_n_all])
+names(heatmap_data) <- c("Topic", "Disease", "Loading")
+
+p2 <- ggplot(heatmap_data, aes(x=Topic, y=Disease, fill=Loading)) +
+  geom_tile() +
+  scale_fill_gradient2(low="blue", mid="white", high="red", midpoint=0) +
+  theme_minimal() +
+  labs(title="Mean Disease Loadings by Topic",
+       x="Topic",
+       y="Disease") +
+  theme(axis.text.x = element_text(angle=45, hjust=1),
+        plot.title = element_text(hjust=0.5, size=16))
+
+
+print(p2)
+
+```
+```{r}
+library(Matrix)
+library(tidyverse)
+
+# Store the actual IDs and ICD codes in order
+person_ids <- sort(unique(icdlab$eid))
+disease_codes <- sort(unique(icdlab$diag_icd10))
+
+# Create mapping dictionaries with names preserved
+id_map <- setNames(seq_len(length(person_ids)), person_ids)
+disease_map <- setNames(seq_len(length(disease_codes)), disease_codes)
+
+# Create sparse matrix with same logic as before
+sparse_data <- icdlab %>%
+  mutate(
+    id_idx = id_map[as.character(eid)],
+    disease_idx = disease_map[as.character(diag_icd10)],
+    age_idx = age_diag - 29
+  ) %>%
+  filter(age_idx >= 1, age_idx <= 52)
+
+# Create sparse array using sparseMatrix, now with dimnames
+sparse_arrays <- vector("list", 52)
+for(t in 1:52) {
+  temp_data <- sparse_data %>% filter(age_idx == t)
+  sparse_arrays[[t]] <- sparseMatrix(
+    i = temp_data$id_idx,
+    j = temp_data$disease_idx,
+    x = 1,
+    dims = c(length(id_map), length(disease_map)),
+    dimnames = list(person_ids, disease_codes)  # Add names to dimensions
+  )
+}
+
+# Save the dimension information
+array_dims <- list(
+  people = person_ids,
+  diseases = disease_codes,
+  ages = 30:81
+)
+
+# Now you can access by name or index:
+# By index: sparse_arrays[[t]][i,j]
+# By name: sparse_arrays[[t]]["1000015", "272"]
+```
+
+
+```{r}
+
+phiatm=ATM::UKB_HES_10topics[1:81,c(1:348),]
+colnames(phiatm)=c(disease_names_list)
+rownames(phiatm)=1:81
+l=melt(phiatm)
+names(l)=c("Time","Disease","Signature","value")
+
+# Step 1: Calculate the average value for ranking
+top_diseases <- l %>%
+group_by(Signature, Disease) %>%
+summarize(avg_value = mean(value, na.rm = TRUE)) %>%
+group_by(Signature) %>%
+arrange(Signature, desc(avg_value)) %>%
+slice_head(n = 20) %>%
+ungroup()
+# Step 2: Create a unique Disease-Signature combination for filtering
+l_top <- l %>%
+inner_join(top_diseases, by = c("Signature", "Disease")) %>%
+merge(groups, by.x = "Disease", by.y = "phenotype", all.x = TRUE)
+# Step 3: Create separate disease orders for each signature
+l_top <- l_top %>%
+group_by(Signature) %>%
+mutate(Disease = factor(Disease,
+levels = unique(Disease[order(avg_value,decreasing = F)]))) %>%
+ungroup()
+# Step 4: Plot with free_y scales to allow different diseases per facet
+p2 <- ggplot(l_top, aes(Time, Disease, fill = value)) +
+geom_tile() +
+facet_wrap(~ Signature, scales = "free_y", drop = TRUE) +
+labs(x = "Time (years from 30)", y = NULL,
+title = "Top 20 diseases per signature over time",
+fill = "Weight") +
+scale_fill_viridis_c(option = "C", direction = +1) +
+theme_minimal() +
+theme(axis.text.y = element_text(size = 8),
+strip.text = element_text(size = 10),
+axis.ticks.y = element_blank(),
+panel.spacing = unit(0.5, "lines"))
+
 ```

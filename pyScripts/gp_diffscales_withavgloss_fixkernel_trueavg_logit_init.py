@@ -44,15 +44,26 @@ class AladynSurvivalFixedKernelsAvgLoss_logitinit(nn.Module):
 
     def initialize_params(self):
         """Initialize parameters using SVD and GP priors"""
+
+        epsilon = 1e-8
         # Compute average disease occurrence matrix (N x D)
+        """
         Y_avg = torch.mean(self.Y, dim=2)
 
         
-        epsilon = 1e-8
+        
         Y_logit = torch.log((Y_avg + epsilon) / (1 - Y_avg + epsilon))
-    
-    # Perform SVD in logit space
         U, S, Vh = torch.linalg.svd(Y_logit, full_matrices=False)
+        """
+    
+        # Compute logit of each timepoint
+        Y_logit = torch.log(self.Y + epsilon) - torch.log(1 - self.Y + epsilon)  # logit at each timepoint
+
+        # Average the logits over time
+        Y_avg = torch.mean(Y_logit, dim=2)
+
+    # Perform SVD in logit space
+        U, S, Vh = torch.linalg.svd(Y_avg, full_matrices=False)
 
         """Initialize pwith centered data? try?
         ## try with centering?
