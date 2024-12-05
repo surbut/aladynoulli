@@ -160,7 +160,7 @@ aladyn_risks <- list()
 
 for(age in ages) {
   time_idx <- age - 29  # Convert age to time index
-  aladyn_risks[[as.character(age)]] <- calc_remaining_risk(model_data$pi_pred, time_idx)
+  aladyn_risks[[as.character(age)]] <- calc_remaining_risk(pi_pred, time_idx)
 }
 
 
