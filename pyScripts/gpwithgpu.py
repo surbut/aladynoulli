@@ -14,90 +14,107 @@ import matplotlib.pyplot as plt
 from scipy.special import softmax
 import seaborn as sns
 
-class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit(nn.Module):
+class AladynSurvivalFixedKernelsAvgLoss_clust_logitInitgp(nn.Module):
     def __init__(self, N, D, T, K, P, G, Y, prevalence_t, disease_names=None):
         super().__init__()
+        
+        # Check for MPS (Mac GPU) availability
+        if torch.backends.mps.is_available():
+            self.device = torch.device("mps")
+            print("Using MPS (Mac GPU)")
+        elif torch.cuda.is_available():
+            self.device = torch.device("cuda")
+            print("Using CUDA GPU")
+        else:
+            self.device = torch.device("cpu")
+            print("Using CPU")
+        
+        # Store dimensions
         self.N = N
         self.D = D
         self.T = T
         self.K = K
         self.P = P
-        self.psi = None 
         self.disease_names = disease_names
         self.jitter = 1e-6
 
-        # Convert inputs to tensors
-        self.G = torch.tensor(G, dtype=torch.float32)
-        self.Y = torch.tensor(Y, dtype=torch.float32)
+        # Move all tensors to GPU immediately
+        self.G = torch.tensor(G, dtype=torch.float32).to(self.device)
+        self.Y = torch.tensor(Y, dtype=torch.float32).to(self.device)
+        self.prevalence_t = torch.tensor(prevalence_t, dtype=torch.float32).to(self.device)
         
-        # Store prevalence and compute logit
-        self.prevalence_t = torch.tensor(prevalence_t, dtype=torch.float32)
+        # Compute logit on GPU
         epsilon = 1e-8
         self.logit_prev_t = torch.log(
             (self.prevalence_t + epsilon) / (1 - self.prevalence_t + epsilon)
-        )  # D x T
+        ).to(self.device)
         
         # Fixed kernel parameters
         self.lambda_length_scale = T/4
         self.phi_length_scale = T/3
         self.amplitude = 1
 
-        # Initialize parameters
+        # Initialize parameters (kernels and other params will be created on GPU)
         self.update_kernels()
         self.initialize_params()
+
+    def update_kernels(self):
+        """Compute fixed covariance matrices on GPU"""
+        times = torch.arange(self.T, dtype=torch.float32).to(self.device)
+        sq_dists = (times.unsqueeze(0) - times.unsqueeze(1)) ** 2
         
+        # Compute kernels with fixed parameters
+        K_lambda = self.amplitude ** 2 * torch.exp(-0.5 * sq_dists / (self.lambda_length_scale ** 2))
+        K_phi = self.amplitude ** 2 * torch.exp(-0.5 * sq_dists / (self.phi_length_scale ** 2))
+        
+        # Add jitter on GPU
+        jitter_matrix = self.jitter * torch.eye(self.T, device=self.device)
+        
+        # Store on GPU
+        self.K_lambda = [K_lambda + jitter_matrix] * self.K
+        self.K_phi = [K_phi + jitter_matrix] * self.K
+
     def initialize_params(self, true_psi=None, **kwargs):
-        """Initialize parameters with either true psi from simulation or clustering"""
-        epsilon=1e-8
-        """
-        risks are more naturally scaled when we average in probability space first.
-        """
+        """Initialize parameters on GPU"""
         torch.manual_seed(42)
         
+        # Compute Y_avg on GPU
         Y_avg = torch.mean(self.Y, dim=2)
-        
+        epsilon = 1e-8
         Y_avg = torch.log((Y_avg + epsilon)/(1-Y_avg+epsilon))
-      
-
-        if true_psi is not None:
-            # Use true psi from simulation
-            self.psi = nn.Parameter(true_psi)
-            print("\nUsing true psi from simulation")
-            
-        else:
-            # Original clustering code
-            
-            Y_corr = torch.corrcoef(Y_avg.T)
-            similarity = (Y_corr + 1) / 2
-            
-            spectral = SpectralClustering(
-                n_clusters=self.K,
-                assign_labels='kmeans',
-                affinity='precomputed',
-                n_init=10,
-                random_state=42
-            ).fit(similarity.numpy())
-            
-            self.clusters = spectral.labels_
-            
-            # Initialize psi with cluster deviations
-            psi_init = torch.zeros((self.K, self.D))
-            for k in range(self.K):
-                cluster_mask = (self.clusters == k)
-                psi_init[k, cluster_mask] = 1.0 + 0.1 * torch.randn(cluster_mask.sum())
-                psi_init[k, ~cluster_mask] = -3.0 + 0.01 * torch.randn((~cluster_mask).sum())
-            
-            self.psi = nn.Parameter(psi_init)
-            
-            print("\nCluster Sizes:")
-            unique, counts = np.unique(self.clusters, return_counts=True)
-            for k, count in zip(unique, counts):
-                print(f"Cluster {k}: {count} diseases")
+        
+        # Need to move to CPU for sklearn, then back to GPU
+        Y_corr = torch.corrcoef(Y_avg.T)
+        similarity = (Y_corr + 1) / 2
+        
+        spectral = SpectralClustering(
+            n_clusters=self.K,
+            assign_labels='kmeans',
+            affinity='precomputed',
+            n_init=10,
+            random_state=42
+        ).fit(similarity.cpu().numpy())
+        
+        self.clusters = spectral.labels_
+        
+        # Initialize parameters on GPU
+        psi_init = torch.zeros((self.K, self.D), device=self.device)
+        for k in range(self.K):
+            cluster_mask = torch.tensor(self.clusters == k, device=self.device)
+            psi_init[k, cluster_mask] = 1.0 + 0.1 * torch.randn(cluster_mask.sum(), device=self.device)
+            psi_init[k, ~cluster_mask] = -3.0 + 0.01 * torch.randn((~cluster_mask).sum(), device=self.device)
+        
+        self.psi = nn.Parameter(psi_init)
+        
+        print("\nCluster Sizes:")
+        unique, counts = np.unique(self.clusters, return_counts=True)
+        for k, count in zip(unique, counts):
+            print(f"Cluster {k}: {count} diseases")
         
         # Initialize other parameters using the psi (true or clustered)
-        gamma_init = torch.zeros((self.P, self.K))
-        lambda_init = torch.zeros((self.N, self.K, self.T))
-        phi_init = torch.zeros((self.K, self.D, self.T))
+        gamma_init = torch.zeros((self.P, self.K), device=self.device)
+        lambda_init = torch.zeros((self.N, self.K, self.T), device=self.device)
+        phi_init = torch.zeros((self.K, self.D, self.T), device=self.device)
         
         # Rest of initialization remains the same
         for k in range(self.K):
@@ -132,144 +149,6 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit(nn.Module):
         
         print("Initialization complete!")
     
-    """
-    def initialize_params(self, clustering_method='hierarchical', **kwargs):
-        Initialize parameters with proper temporal variation and cluster structure
-        Y_avg = torch.mean(self.Y, dim=2)
-        Y_corr = torch.corrcoef(Y_avg.T)
-        similarity = (Y_corr + 1) / 2
-        
-    
-        # Perform spectral clustering
-        spectral = SpectralClustering(
-            n_clusters=self.K,  # One less for background state
-            assign_labels='kmeans',
-            affinity='precomputed',
-            n_init=10,
-            random_state=42
-        ).fit(similarity.numpy())
-        
-        self.clusters = spectral.labels_
-
-
-        # Initialize psi with cluster deviations
-        psi_init = torch.zeros((self.K, self.D))
-        for k in range(self.K):
-            cluster_mask = (self.clusters == k)
-            psi_init[k, cluster_mask] = 1.0 + 0.1 * torch.randn(cluster_mask.sum())  # In-cluster
-            psi_init[k, ~cluster_mask] = -3.0 + 0.01 * torch.randn((~cluster_mask).sum())  # Out-cluster
-        #psi_init[self.K-1, :] = -4.6 + 0.1 * torch.randn(self.D)  # Background state
-
-        self.psi = nn.Parameter(psi_init)
-    
-        
-
-        # Print cluster sizes immediately
-        print("\nCluster Sizes:")
-        unique, counts = np.unique(self.clusters, return_counts=True)
-        for k, count in zip(unique, counts):
-            print(f"Cluster {k}: {count} diseases")
-        
-        
-        # Initialize gamma, lambda, and phi with temporal variation
-        gamma_init = torch.zeros((self.P, self.K))
-        lambda_init = torch.zeros((self.N, self.K, self.T))
-        phi_init = torch.zeros((self.K, self.D, self.T))  # Add phi initialization
-        
-        # For each state k
-        for k in range(self.K):
-            # Lambda initialization (unchanged)
-            cluster_diseases = (self.clusters == k)
-            base_value = Y_avg[:, cluster_diseases].mean(dim=1)
-            gamma_init[:, k] = torch.linalg.lstsq(self.G, base_value.unsqueeze(1)).solution.squeeze()
-            
-            # Project through gamma and add GP variation for lambda
-            lambda_means = self.G @ gamma_init[:, k]
-            L_k = torch.linalg.cholesky(self.K_lambda[k])
-            for i in range(self.N):
-                eps = L_k @ torch.randn(self.T)
-                lambda_init[i, k, :] = lambda_means[i] + eps
-            
-            # Add GP variation to phi around (mu + psi)
-            L_phi = torch.linalg.cholesky(self.K_phi[k])
-            for d in range(self.D):
-                mean_phi = self.logit_prev_t[d, :] + psi_init[k, d]  # mu_d + psi_kd
-                eps = L_phi @ torch.randn(self.T)
-                phi_init[k, d, :] = mean_phi + eps
-        
-       
-        
-        # Background state, absence of disease
-        background_mean = -Y_avg.mean(dim=1) 
-        gamma_init[:, -1] = torch.linalg.lstsq(self.G, background_mean.unsqueeze(1)).solution.squeeze()
-        lambda_means = self.G @ gamma_init[:, -1]
-        L_k = torch.linalg.cholesky(self.K_lambda[-1])
-        for i in range(self.N):
-            eps = L_k @ torch.randn(self.T)
-            lambda_init[i, -1, :] = lambda_means[i] + eps
-            
-        # Background state phi
-        L_phi = torch.linalg.cholesky(self.K_phi[-1])
-        for d in range(self.D):
-            mean_phi = self.logit_prev_t[d, :] + psi_init[-1, d]
-            eps = L_phi @ torch.randn(self.T)
-            phi_init[-1, d, :] = mean_phi + eps
-        
-        
-        # Store parameters
-        self.gamma = nn.Parameter(gamma_init)
-        self.lambda_ = nn.Parameter(lambda_init)
-        self.phi = nn.Parameter(phi_init)
-        
-        print("Initialization complete!")
-    """      
-    def update_kernels(self):
-        """Compute fixed covariance matrices"""
-        times = torch.arange(self.T, dtype=torch.float32)
-        sq_dists = (times.unsqueeze(0) - times.unsqueeze(1)) ** 2
-        
-        # Target condition number
-        max_condition = 1e4
-        
-        self.K_lambda = []
-        self.K_phi = []
-        
-        # Compute kernels with fixed parameters
-        K_lambda = self.amplitude ** 2 * torch.exp(-0.5 * sq_dists / (self.lambda_length_scale ** 2))
-        K_phi = self.amplitude ** 2 * torch.exp(-0.5 * sq_dists / (self.phi_length_scale ** 2))
-        
-            # Use fixed small jitter
-        jitter = 1e-6
-        jitter_matrix = jitter * torch.eye(self.T)
-
-        # Create kernels without adaptive jitter
-        self.K_lambda = [K_lambda + jitter_matrix] * self.K
-        self.K_phi = [K_phi + jitter_matrix] * self.K
-
-        # Optional: Print condition numbers to verify they're reasonable
-        print(f"Lambda kernel condition number: {torch.linalg.cond(self.K_lambda[0]):.2f}")
-        print(f"Phi kernel condition number: {torch.linalg.cond(self.K_phi[0]):.2f}")
-
-        """ 
-        # Add jitter to each kernel
-        for K, name in [(K_lambda, 'lambda'), (K_phi, 'phi')]:
-            jitter = 1e-6
-            while True:
-                K_test = K + jitter * torch.eye(self.T)
-                cond = torch.linalg.cond(K_test)
-                if cond < max_condition:
-                    break
-                jitter *= 2
-                if jitter > 0.1:
-                    print(f"Warning: Large jitter needed for {name} kernel")
-                    break
-            
-            if name == 'lambda':
-                self.K_lambda = [K + jitter * torch.eye(self.T)] * self.K
-            else:
-                self.K_phi = [K + jitter * torch.eye(self.T)] * self.K
-        """
-
     def forward(self):
         theta = torch.softmax(self.lambda_, dim=1)
         epsilon=1e-8
@@ -380,24 +259,15 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit(nn.Module):
         #print("\nHealthy State (Topic {self.K-1})")
 
 
-    def fit(self, event_times, num_epochs=1000, learning_rate=1e-4, lambda_reg=1e-2,
-        convergence_threshold=1e-3, patience=10):
-        """
-        Fit model with early stopping and parameter monitoring
+    def fit(self, event_times, num_epochs=1000, learning_rate=1e-4, lambda_reg=1e-2):
+        # Move event_times to GPU
+        event_times = torch.tensor(event_times, dtype=torch.long).to(self.device)
         
         optimizer = optim.Adam([
-            {'params': [self.lambda_, self.phi,self.psi]},
-            {'params': [self.gamma], 'weight_decay': lambda_reg}
-        ], lr=learning_rate)
-        """
-
-            # Create optimizer with consistent learning rates
-        optimizer = optim.Adam([
             {'params': [self.lambda_, self.phi], 'lr': learning_rate},
-            {'params': [self.psi], 'lr': learning_rate},  # Same base learning rate
+            {'params': [self.psi], 'lr': learning_rate},
             {'params': [self.gamma], 'weight_decay': lambda_reg, 'lr': learning_rate}
         ])
-
         
         history = {
             'loss': [],
