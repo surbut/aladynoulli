@@ -52,14 +52,12 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit(nn.Module):
         """
         risks are more naturally scaled when we average in probability space first.
         """
+        torch.manual_seed(42)
+        
         Y_avg = torch.mean(self.Y, dim=2)
         
         Y_avg = torch.log((Y_avg + epsilon)/(1-Y_avg+epsilon))
-        """
-        # Take logit of each timepoint, then average
-        Y_logit = torch.log(self.Y + epsilon) - torch.log(1 - self.Y + epsilon)  # logit at each timepoint
-        Y_avg = torch.mean(Y_logit,dim=2)
-        """
+      
 
         if true_psi is not None:
             # Use true psi from simulation
