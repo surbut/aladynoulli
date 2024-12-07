@@ -52,7 +52,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit(nn.Module):
         """
         risks are more naturally scaled when we average in probability space first.
         """
-        torch.manual_seed(42)
+        
         
         Y_avg = torch.mean(self.Y, dim=2)
         
@@ -382,10 +382,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit(nn.Module):
 
     def fit(self, event_times, num_epochs=1000, learning_rate=1e-4, lambda_reg=1e-2,
         convergence_threshold=1e-3, patience=10):
-        torch.manual_seed(42)
-        np.random.seed(42)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+       
         """
         Fit model with early stopping and parameter monitoring
         

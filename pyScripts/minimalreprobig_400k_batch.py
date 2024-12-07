@@ -126,6 +126,14 @@ def main():
     # Subset the data
     Y_sub, E_sub, G_sub, indices = subset_data(Y, E, G, args.n_samples, args.seed)
     
+
+    torch.manual_seed(42)
+    np.random.seed(42)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(42)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
     # Initialize model with subsetted data
     model = AladynSurvivalFixedKernelsAvgLoss_clust_logitInit(
         N=Y_sub.shape[0],
@@ -147,6 +155,9 @@ def main():
     
     # Train the model
     print(f"\nStarting training for {args.num_epochs} epochs...")
+
+
+    
     history = model.fit(E_sub, 
                        num_epochs=args.num_epochs,
                        learning_rate=args.learning_rate,
