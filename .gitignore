@@ -1,3 +1,4 @@
+output/*
 *.DS*
 pyScripts/__pycache__/*
 *cache*

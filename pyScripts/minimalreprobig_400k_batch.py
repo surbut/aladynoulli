@@ -77,7 +77,7 @@ def subset_data(Y, E, G, n_samples, seed):
     print(f"Original shapes: Y={Y.shape}, E={E.shape}, G={G.shape}")
     print(f"New shapes: Y={Y_sub.shape}, E={E_sub.shape}, G={G_sub.shape}")
     
-    return Y_sub, E_sub, G_sub
+    return Y_sub, E_sub, G_sub, indices
 
 def save_visualizations(model, disease_names, output_dir):
     """Generate and save visualization plots."""
@@ -124,7 +124,7 @@ def main():
     Y, E, G, essentials = load_model_essentials(args.base_path)
     
     # Subset the data
-    Y_sub, E_sub, G_sub = subset_data(Y, E, G, args.n_samples, args.seed)
+    Y_sub, E_sub, G_sub, indices = subset_data(Y, E, G, args.n_samples, args.seed)
     
     # Initialize model with subsetted data
     model = AladynSurvivalFixedKernelsAvgLoss_clust_logitInit(
@@ -155,6 +155,7 @@ def main():
     # Save the trained model and history
     torch.save({
         'model_state': model.state_dict(),
+        'person_indices': indices,
         'initial_psi': initial_psi,
         'final_psi': model.psi.detach(),
         'training_history': history
