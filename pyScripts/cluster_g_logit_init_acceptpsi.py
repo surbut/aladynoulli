@@ -485,7 +485,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
                     'psi': self.psi.detach().clone(),
                     'gamma': self.gamma.detach().clone()
                 }
-            
+            # Only update parameters if we haven't converged/stopped
             optimizer.step()
             
             # Time estimate on first epoch
