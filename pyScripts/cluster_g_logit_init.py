@@ -444,12 +444,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit(nn.Module):
             print(f"Max:  {self.psi.grad.max().item():.4e}")
             print(f"Min:  {self.psi.grad.min().item():.4e}")
             
-            # Check if psi is actually changing
-            old_psi = self.psi.detach().clone()
-            optimizer.step()
-            psi_change = (self.psi - old_psi).abs().mean().item()
-            print(f"Average psi change: {psi_change:.4e}")
-
+       
 
             if epoch < 10 or epoch % 10 == 0:
                 print(f"Epoch {epoch}, Loss: {loss_val:.4f}, "
