@@ -1,0 +1,347 @@
+Cluster,Disease,Prevalence
+0,Other anemias,0.0047
+0,Constipation,0.0035
+0,Pulmonary collapse; interstitial and compensatory emphysema,0.0032
+0,Pleurisy; pleural effusion,0.0026
+0,Inflammatory and toxic neuropathy,0.0022
+0,"Iron deficiency anemias, unspecified or not due to blood loss",0.0021
+0,Hypotension NOS,0.0021
+0,Hypovolemia,0.0020
+0,Viral infection,0.0018
+0,Hyposmolality and/or hyponatremia,0.0017
+0,Hypopotassemia,0.0014
+0,Bacterial infection NOS,0.0013
+0,Acidosis,0.0013
+0,Thrombocytopenia,0.0013
+0,Candidiasis,0.0012
+0,Carbuncle and furuncle,0.0012
+0,Cellulitis and abscess of arm/hand,0.0011
+0,Pulmonary heart disease,0.0010
+0,Other local infections of skin and subcutaneous tissue,0.0009
+0,Sepsis,0.0009
+0,Orthostatic hypotension,0.0008
+0,Staphylococcus infections,0.0006
+0,Neutropenia,0.0006
+0,Streptococcus infection,0.0005
+0,E. coli,0.0004
+0,Decubitus ulcer,0.0004
+0,Chronic ulcer of skin,0.0003
+0,Gram negative septicemia,0.0002
+1,Senile cataract,0.0023
+1,Cataract,0.0016
+1,Glaucoma,0.0015
+1,Visual disturbances,0.0015
+1,Disorders of lacrimal system,0.0014
+1,Disorders of vitreous body,0.0012
+1,Macular degeneration (senile) of retina NOS,0.0009
+1,Inflammation of eyelids,0.0009
+1,Other disorders of eyelids,0.0009
+1,Myopia,0.0007
+1,Retinal vascular changes and abnomalities,0.0004
+1,Primary open angle glaucoma,0.0004
+1,Disorders of conjunctiva,0.0004
+1,Retinal detachments and defects,0.0003
+1,Other retinal disorders,0.0002
+1,Retinal detachment with retinal defect,0.0001
+2,Hyperplasia of prostate,0.0023
+2,Cancer of prostate,0.0011
+2,Other disorders of male genital organs,0.0007
+2,Inguinal hernia,0.0006
+2,Malignant neoplasm of bladder,0.0003
+2,Other disorders of prostate,0.0003
+2,Bladder neck obstruction,0.0002
+2,Urethral stricture (not specified as infectious),0.0002
+2,Hydrocele,0.0002
+2,Chronic cystitis,0.0001
+2,Chronic prostatitis,0.0001
+2,Redundant prepuce and phimosis/BXO,0.0001
+3,Essential hypertension,0.0105
+3,Hyperlipidemia,0.0086
+3,Hypercholesterolemia,0.0056
+3,Arrhythmia (cardiac) NOS,0.0056
+3,Coronary atherosclerosis,0.0040
+3,Sleep apnea,0.0038
+3,Angina pectoris,0.0035
+3,Mitral valve disease,0.0020
+3,Heart failure NOS,0.0018
+3,Myocardial infarction,0.0015
+3,"Other chronic ischemic heart disease, unspecified",0.0012
+3,Paroxysmal supraventricular tachycardia,0.0012
+3,Cardiomegaly,0.0011
+3,Primary/intrinsic cardiomyopathies,0.0011
+3,"Peripheral vascular disease, unspecified",0.0011
+3,Aortic valve disease,0.0010
+3,Right bundle branch block,0.0009
+3,Paroxysmal ventricular tachycardia,0.0009
+3,First degree AV block,0.0008
+3,Other forms of chronic heart disease,0.0007
+3,Left bundle branch block,0.0007
+3,Pericarditis,0.0006
+3,Congenital anomalies of great vessels,0.0006
+3,Disease of tricuspid valve,0.0005
+3,Other acute and subacute forms of ischemic heart disease,0.0004
+3,Unstable angina (intermediate coronary syndrome),0.0003
+3,Rheumatic disease of the heart valves,0.0002
+3,Cardiac arrest,0.0002
+4,Benign neoplasm of skin,0.0054
+4,Seborrheic keratosis,0.0045
+4,Disorder of skin and subcutaneous tissue NOS,0.0038
+4,Atopic/contact dermatitis due to other or unspecified,0.0032
+4,Actinic keratosis,0.0029
+4,"Hemangioma and lymphangioma, any site",0.0024
+4,Other non-epithelial cancer of skin,0.0020
+4,Other hypertrophic and atrophic conditions of skin,0.0017
+4,Sebaceous cyst,0.0017
+4,Scar conditions and fibrosis of skin,0.0016
+4,Viral warts & HPV,0.0013
+4,Melanomas of skin,0.0005
+5,Pain in joint,0.0101
+5,Pain in limb,0.0076
+5,"Osteoarthrosis, localized, primary",0.0049
+5,Arthropathy NOS,0.0045
+5,Osteoarthrosis NOS,0.0043
+5,Other disorders of bone and cartilage,0.0042
+5,Enthesopathy,0.0041
+5,Other disorders of soft tissues,0.0039
+5,Other peripheral nerve disorders,0.0022
+5,Other derangement of joint,0.0022
+5,Joint effusions,0.0019
+5,Peripheral enthesopathies and allied syndromes,0.0016
+5,"Other disorders of synovium, tendon, and bursa",0.0012
+5,"Osteoarthrosis, generalized",0.0012
+5,Synovitis and tenosynovitis,0.0011
+5,Rheumatoid arthritis,0.0010
+5,Other tests,0.0010
+5,Internal derangement of knee,0.0009
+5,Bursitis,0.0007
+5,Hallux valgus (Bunion),0.0007
+5,Symptoms and disorders of the joints,0.0007
+5,Hammer toe (acquired),0.0006
+5,Other acquired deformities of limbs,0.0006
+5,Osteoarthritis; localized,0.0004
+5,Acquired toe deformities,0.0002
+5,Hallux rigidus,0.0002
+6,Hypothyroidism NOS,0.0034
+6,Acute upper respiratory infections of multiple or unspecified sites,0.0033
+6,Hearing loss,0.0025
+6,Osteoporosis NOS,0.0025
+6,Migraine,0.0024
+6,Acute pharyngitis,0.0022
+6,Other disorders of liver,0.0019
+6,Lump or mass in breast,0.0015
+6,Sleep disorders,0.0012
+6,Malignant neoplasm of female breast,0.0011
+6,Irritable Bowel Syndrome,0.0011
+6,Neoplasm of uncertain behavior,0.0010
+6,Disorders of calcium/phosphorus metabolism,0.0010
+6,Secondary hypothyroidism,0.0009
+6,Psoriasis vulgaris,0.0009
+6,"Epilepsy, recurrent seizures, convulsions",0.0008
+6,Osteopenia or other disorder of bone and cartilage,0.0008
+6,Neoplasm of unspecified nature of digestive system,0.0006
+6,Raynaud's syndrome,0.0006
+6,Varicose veins of lower extremity,0.0006
+6,"Ganglion and cyst of synovium, tendon, and bursa",0.0006
+6,Lipoma,0.0005
+6,Lipoma of skin and subcutaneous tissue,0.0005
+6,Other benign neoplasm of connective and other soft tissue,0.0005
+6,Thyrotoxicosis with or without goiter,0.0005
+6,Otitis media,0.0005
+6,"Diseases of the oral soft tissues, excluding lesions specific for gingiva and tongue",0.0005
+6,Umbilical hernia,0.0005
+6,Ingrowing nail,0.0005
+6,"Malignant neoplasm of kidney, except pelvis",0.0004
+6,Non-Hodgkins lymphoma,0.0004
+6,Hypoglycemia,0.0004
+6,Abdominal aortic aneurysm,0.0004
+6,Acute pancreatitis,0.0004
+6,Hypertrophy of breast (Gynecomastia),0.0004
+6,Noninflammatory disorders of vulva and perineum,0.0004
+6,Dyspareunia,0.0004
+6,Bacterial enteritis,0.0003
+6,Breast cancer [female],0.0003
+6,Parkinson's disease,0.0003
+6,Multiple sclerosis,0.0003
+6,Facial nerve disorders [CN7],0.0003
+6,Ptosis of eyelid,0.0003
+6,Cerebral ischemia,0.0003
+6,Stricture of artery,0.0003
+6,Chronic tonsillitis and adenoiditis,0.0003
+6,"Other diseases of respiratory system, NEC",0.0003
+6,Polymyalgia Rheumatica,0.0003
+6,Viral Enteritis,0.0002
+6,Malignant neoplasm of uterus,0.0002
+6,Malignant neoplasm of ovary,0.0002
+6,Strabismus (not specified as paralytic),0.0002
+6,Diseases and other conditions of the tongue,0.0002
+6,Celiac disease,0.0002
+6,Benign neoplasm of breast,0.0002
+6,Spondylosis and allied disorders,0.0002
+6,Contracture of palmar fascia [Dupuytren's disease],0.0002
+6,"Benign neoplasm of lip, oral cavity, and pharynx",0.0001
+6,Benign neoplasm of ovary,0.0001
+6,Ectropion or entropion,0.0001
+6,Epiphora,0.0001
+6,Perforation of tympanic membrane,0.0001
+6,Phlebitis and thrombophlebitis of lower extremities,0.0001
+6,Disturbances in tooth eruption,0.0001
+6,Acute appendicitis,0.0001
+6,Other symptoms/disorders or the urinary system,0.0001
+6,Cervicitis and endocervicitis,0.0001
+6,"Chronic glomerulonephritis, NOS",0.0000
+6,Other disorders of testis,0.0000
+6,Hypertrophy of female genital organs,0.0000
+6,"Rheumatism, unspecified and fibrositis",0.0000
+6,Malunion and nonunion of fracture,0.0000
+7,Cholelithiasis,0.0011
+7,Other disorders of gallbladder,0.0005
+7,Other disorders of biliary tract,0.0005
+7,Cholecystitis without cholelithiasis,0.0004
+7,Cholelithiasis with other cholecystitis,0.0003
+7,Calculus of bile duct,0.0003
+7,Cholelithiasis with acute cholecystitis,0.0001
+8,GERD,0.0069
+8,Other disorders of stomach and duodenum,0.0021
+8,Diaphragmatic hernia,0.0015
+8,Reflux esophagitis,0.0012
+8,Esophageal bleeding (varices/hemorrhage),0.0011
+8,Gastritis and duodenitis,0.0011
+8,Benign neoplasm of other parts of digestive system,0.0008
+8,Hemorrhage of gastrointestinal tract,0.0008
+8,Other specified gastritis,0.0007
+8,Barrett's esophagus,0.0005
+8,Abdominal pain,0.0005
+8,"Esophagitis, GERD and related diseases",0.0004
+8,Stricture and stenosis of esophagus,0.0004
+8,Gastric ulcer,0.0004
+8,Duodenitis,0.0003
+8,Duodenal ulcer,0.0002
+8,Acute gastritis,0.0002
+8,Hematemesis,0.0002
+8,Ulcer of esophagus,0.0001
+9,Uterine leiomyoma,0.0011
+9,Disorders of menstruation and other abnormal bleeding from female genital tract,0.0011
+9,Noninflammatory disorders of vagina,0.0010
+9,Ovarian cyst,0.0010
+9,Irregular menstrual cycle,0.0006
+9,Postmenopausal bleeding,0.0006
+9,Endometriosis,0.0005
+9,"Disorders of uterus, NEC",0.0005
+9,Excessive or frequent menstruation,0.0005
+9,"Infertility, female",0.0005
+9,Cervical intraepithelial neoplasia [CIN] [Cervical dysplasia],0.0004
+9,Polyp of corpus uteri,0.0004
+9,Noninflammatory disorders of cervix,0.0003
+9,Pain and other symptoms associated with female genital organs,0.0003
+9,Irregular menstrual bleeding,0.0003
+9,"Pelvic peritoneal adhesions, female (postoperative) (postinfection)",0.0002
+9,Mucous polyp of cervix,0.0002
+9,Irregular menstrual cycle/bleeding,0.0002
+9,Dysmenorrhea,0.0002
+9,Endometrial hyperplasia,0.0001
+10,Back pain,0.0066
+10,Spondylosis without myelopathy,0.0047
+10,"Neuralgia, neuritis, and radiculitis NOS",0.0036
+10,Cervicalgia,0.0034
+10,Myalgia and myositis unspecified,0.0034
+10,Spinal stenosis,0.0032
+10,Degeneration of intervertebral disc,0.0026
+10,Sciatica,0.0025
+10,Displacement of intervertebral disc,0.0014
+10,Acquired spondylolisthesis,0.0012
+10,"Thoracic or lumbosacral neuritis or radiculitis, unspecified",0.0009
+10,Other and unspecified disc disorder,0.0008
+10,Degenerative disease of the spinal cord,0.0006
+10,Kyphoscoliosis and scoliosis,0.0006
+10,Other inflammatory spondylopathies,0.0005
+11,Anxiety disorder,0.0059
+11,Major depressive disorder,0.0054
+11,Obesity,0.0049
+11,Tobacco use disorder,0.0021
+11,Other chronic nonalcoholic liver disease,0.0020
+11,Alcohol-related disorders,0.0015
+11,Bipolar,0.0012
+11,Other diseases of the teeth and supporting structures,0.0005
+11,Dental caries,0.0004
+11,Alcoholic liver damage,0.0003
+11,Periapical abscess,0.0003
+11,Chronic periodontitis,0.0001
+12,Pneumonia,0.0023
+12,Chronic airway obstruction,0.0013
+12,Respiratory failure,0.0013
+12,Pneumococcal pneumonia,0.0009
+12,Emphysema,0.0009
+12,Empyema and pneumothorax,0.0009
+12,Cancer of bronchus; lung,0.0007
+12,Bronchiectasis,0.0007
+12,Bacterial pneumonia,0.0006
+12,Postinflammatory pulmonary fibrosis,0.0006
+12,Obstructive chronic bronchitis,0.0005
+13,Occlusion and stenosis of precerebral arteries,0.0014
+13,Occlusion of cerebral arteries,0.0013
+13,"Cerebral artery occlusion, with cerebral infarction",0.0008
+13,Transient cerebral ischemia,0.0007
+13,Late effects of cerebrovascular disease,0.0005
+13,Hemiplegia,0.0004
+13,Cerebrovascular disease,0.0004
+14,"Malignant neoplasm, other",0.0008
+14,Secondary malignant neoplasm,0.0008
+14,Secondary malignancy of lymph nodes,0.0008
+14,Secondary malignancy of respiratory organs,0.0005
+14,Secondary malignancy of bone,0.0005
+14,Secondary malignant neoplasm of digestive systems,0.0004
+14,Secondary malignant neoplasm of liver,0.0004
+15,Type 2 diabetes,0.0035
+15,Acute renal failure,0.0026
+15,Chronic renal failure [CKD],0.0019
+15,Other disorders of the kidney and ureters,0.0019
+15,Hypertensive chronic kidney disease,0.0018
+15,Hyperpotassemia,0.0015
+15,"Chronic Kidney Disease, Stage III",0.0014
+15,"Cyst of kidney, acquired",0.0014
+15,Gout,0.0011
+15,Type 2 diabetes with ophthalmic manifestations,0.0006
+15,Type 1 diabetes,0.0003
+15,Renal failure NOS,0.0003
+15,Diabetic retinopathy,0.0002
+16,Benign neoplasm of colon,0.0049
+16,Hemorrhoids,0.0038
+16,Diverticulosis,0.0038
+16,Other disorders of intestine,0.0023
+16,Noninfectious gastroenteritis,0.0017
+16,Anal and rectal conditions,0.0013
+16,Blood in stool,0.0012
+16,Hemorrhage of rectum and anus,0.0012
+16,Anal and rectal polyp,0.0010
+16,Other intestinal obstruction,0.0008
+16,Ventral hernia,0.0007
+16,Functional digestive disorders,0.0007
+16,Regional enteritis,0.0005
+16,Ulcerative colitis,0.0005
+16,Gastrointestinal complications,0.0005
+16,Colon cancer,0.0004
+16,Peritonitis and retroperitoneal infections,0.0004
+16,Peritoneal adhesions (postoperative) (postinfection),0.0004
+16,"Malignant neoplasm of rectum, rectosigmoid junction, and anus",0.0003
+17,Calculus of kidney,0.0017
+17,Hydronephrosis,0.0009
+17,Stricture/obstruction of ureter,0.0008
+17,Pyelonephritis,0.0006
+17,Calculus of ureter,0.0004
+17,Renal colic,0.0001
+18,Asthma,0.0035
+18,Allergic rhinitis,0.0028
+18,Other upper respiratory disease,0.0022
+18,Chronic sinusitis,0.0016
+18,Chronic pharyngitis and nasopharyngitis,0.0011
+18,Septal Deviations/Turbinate Hypertrophy,0.0010
+18,Diseases of the larynx and vocal cords,0.0007
+18,Nasal polyps,0.0002
+19,Urinary tract infection,0.0031
+19,Urinary incontinence,0.0016
+19,Other disorders of bladder,0.0012
+19,Postmenopausal atrophic vaginitis,0.0009
+19,Functional disorders of bladder,0.0005
+19,Cystitis,0.0004
+19,Prolapse of vaginal walls,0.0004
+19,Uterine/Uterovaginal prolapse,0.0002
