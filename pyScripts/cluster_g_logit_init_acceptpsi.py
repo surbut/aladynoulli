@@ -400,8 +400,96 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
                 estimated_total_time = time_per_epoch * num_epochs
                 print(f"\nEstimated total training time: {estimated_total_time/60:.1f} minutes")
     
-        return history
-    
+            return history
+    def plot_genetic_scores(self, original_G=None):
+        """
+        Create box plots of genetic scores to compare original and transformed versions
+        
+        Parameters:
+        original_G: numpy array or torch tensor, the original G matrix before transformation
+        """
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+        
+        # Plot original G if provided
+        if original_G is not None:
+            if torch.is_tensor(original_G):
+                original_G = original_G.numpy()
+            
+            ax1.boxplot([original_G[:, p] for p in range(self.P)],
+                    labels=[f'Component {p+1}' for p in range(self.P)])
+            ax1.set_title('Original Genetic Components')
+            ax1.set_ylabel('Score')
+            ax1.grid(True, alpha=0.3)
+            
+            # Add mean line for original plot
+            orig_mean = original_G.mean()
+            ax1.axhline(y=orig_mean, color='r', linestyle='--', alpha=0.5, label=f'Mean ({orig_mean:.3f})')
+        
+        # Plot transformed G
+        G_np = self.G.numpy()
+        ax2.boxplot([G_np[:, p] for p in range(self.P)],
+                    labels=[f'Component {p+1}' for p in range(self.P)])
+        
+        # Add exact reference lines for transformed plot
+        ax2.axhline(y=0, color='r', linestyle='--', alpha=0.5, label='Mean (0)')
+        ax2.axhline(y=1, color='g', linestyle='--', alpha=0.5, label='±1 std')
+        ax2.axhline(y=-1, color='g', linestyle='--', alpha=0.5)
+        
+        ax2.set_title('Transformed Genetic Components\n(Centered and Scaled)')
+        ax2.set_ylabel('Standardized Score')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+        
+        # Print summary statistics for both
+        print("\nGenetic Components Summary Statistics:")
+        print(f"{'Component':<10} {'Original Mean':>13} {'Original Std':>12} {'Trans. Mean':>12} {'Trans. Std':>11}")
+        print("-" * 60)
+        for p in range(self.P):
+            orig_mean = original_G[:, p].mean() if original_G is not None else float('nan')
+            orig_std = original_G[:, p].std() if original_G is not None else float('nan')
+            trans_mean = G_np[:, p].mean()
+            trans_std = G_np[:, p].std()
+            print(f"{p+1:<10} {orig_mean:>13.3f} {orig_std:>12.3f} {trans_mean:>12.3f} {trans_std:>11.3f}")
+                  
+    def plot_qq_genetic_scores(self, original_G=None, n_components=4):
+        """
+        Create Q-Q plots comparing original and transformed genetic components
+        
+        Parameters:
+        original_G: original genetic components tensor/array
+        n_components: number of components to plot (default=4)
+        """
+        import numpy as np
+        from scipy import stats
+        
+        # Convert tensors to numpy if needed
+        G_np = self.G.numpy()
+        if original_G is not None:
+            if torch.is_tensor(original_G):
+                original_G = original_G.numpy()
+        
+        # Randomly select components
+        selected_components = np.random.choice(self.P, size=n_components, replace=False)
+        
+        # Create subplot grid
+        fig, axes = plt.subplots(n_components, 2, figsize=(12, 4*n_components))
+        
+        for idx, comp in enumerate(selected_components):
+            # Original data Q-Q plot
+            if original_G is not None:
+                stats.probplot(original_G[:, comp], dist="norm", plot=axes[idx, 0])
+                axes[idx, 0].set_title(f'Original Component {comp+1}')
+            
+            # Transformed data Q-Q plot
+            stats.probplot(G_np[:, comp], dist="norm", plot=axes[idx, 1])
+            axes[idx, 1].set_title(f'Transformed Component {comp+1}')
+        
+        plt.tight_layout()
+        plt.show()
+        
     def fit_efficient(self, event_times, num_epochs=1000, learning_rate=1e-4, lambda_reg=1e-2,
                  param_change_threshold=1e-5, consecutive_threshold=3):
         """
