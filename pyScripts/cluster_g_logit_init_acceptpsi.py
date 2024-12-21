@@ -27,10 +27,11 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
         self.jitter = 1e-6
 
         # Convert inputs to tensors
-        #self.G = torch.tensor(G, dtype=torch.float32)
+        self.G = torch.tensor(G, dtype=torch.float32)
         G_centered = G - G.mean(axis=0, keepdims=True)
         G_scaled = G_centered / G_centered.std(axis=0, keepdims=True)
         self.G = torch.tensor(G_scaled, dtype=torch.float32)
+        
         self.Y = torch.tensor(Y, dtype=torch.float32)
         
         # Store prevalence and compute logit
@@ -400,7 +401,8 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
                 estimated_total_time = time_per_epoch * num_epochs
                 print(f"\nEstimated total training time: {estimated_total_time/60:.1f} minutes")
     
-            return history
+        return history
+    
     def plot_genetic_scores(self, original_G=None):
         """
         Create box plots of genetic scores to compare original and transformed versions
