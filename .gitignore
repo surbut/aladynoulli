@@ -8,3 +8,6 @@ pyScripts/__pycache__/*
 data/*
 saved_results/*
 .DS*
+pyScripts/results/*
+pyScripts/*.pt
+pyScripts/*.pt.zip
