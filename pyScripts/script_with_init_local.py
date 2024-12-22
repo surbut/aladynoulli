@@ -83,7 +83,7 @@ def plot_calibration(model, plot_dir):
 
     plt.tight_layout()
     plt.savefig(os.path.join(plot_dir, 'calibration.png'))
-    plt.close()
+    plt.close('all') 
 
     # Save statistics to file
     with open(os.path.join(plot_dir, 'calibration_stats.txt'), 'w') as f:
@@ -213,7 +213,7 @@ def plot_signature_temporal_patterns(model, disease_names, plot_dir, n_top=10, s
     
     plt.tight_layout()
     plt.savefig(os.path.join(plot_dir, 'temporal_patterns.png'))
-    plt.close()
+    plt.close('all') 
 
 def train_and_evaluate(start_index, end_index, work_dir):
     # Load and subset data
@@ -239,6 +239,14 @@ def train_and_evaluate(start_index, end_index, work_dir):
 
     initial_psi = torch.load('initial_psi_400k.pt')
     initial_clusters = torch.load('initial_clusters_400k.pt')
+
+    ### did not run with the new initial, we used built in clusters from the model init with the 1/2 clustering appraohc. 
+    torch.manual_seed(42)
+    np.random.seed(42)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(42)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     model = AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(
         N=Y_100k.shape[0],
@@ -267,7 +275,50 @@ def train_and_evaluate(start_index, end_index, work_dir):
 
     print("Psi values match:", torch.allclose(model.psi, initial_psi))
     logging.info("Model initialized with parameters.")
+
+
+    # For verification, let's save the cluster sizes too
+    original_cluster_sizes = {}
+    unique, counts = np.unique(model.clusters, return_counts=True)
+    for k, count in zip(unique, counts):
+        original_cluster_sizes[k] = count
+    print("\nOriginal cluster sizes:")
+    for k, count in original_cluster_sizes.items():
+        print(f"Cluster {k}: {count} diseases")
     # Save initial plots
+
+    def calculate_calibration_stats(model, Y):
+        """Calculate calibration stats for a model"""
+        with torch.no_grad():
+            predicted = model.forward()
+            pi_pred = predicted[0] if isinstance(predicted, tuple) else predicted
+            pi_pred = pi_pred.cpu().detach().numpy()
+            Y_np = Y.cpu().detach().numpy() if torch.is_tensor(Y) else Y
+            
+            # Convert to numpy and calculate means
+            observed_risk = Y_np.mean(axis=0).flatten()
+            predicted_risk = pi_pred.mean(axis=0).flatten()
+            
+            scale_factor = np.mean(observed_risk) / np.mean(predicted_risk)
+            calibrated_risk = predicted_risk * scale_factor
+            
+            ss_res = np.sum((observed_risk - calibrated_risk) ** 2)
+            ss_tot = np.sum((observed_risk - np.mean(observed_risk)) ** 2)
+            r2 = 1 - (ss_res / ss_tot)
+            
+            return r2, scale_factor, observed_risk, predicted_risk, calibrated_risk
+
+        
+
+
+
+
+    r2_global, scale_global, obs_global, pred_global, cal_global = calculate_calibration_stats(model, Y_100k)
+    print(f"\nBatch model with global psi before calibration:")
+    print(f"R²: {r2_global:.3f}")
+    print(f"Calibration scale factor: {scale_global:.3f}")
+
+
 
     # Check G matrix scaling
     G_mean = model.G.mean(dim=0)
@@ -279,19 +330,10 @@ def train_and_evaluate(start_index, end_index, work_dir):
     logging.info(f"G matrix scaling - Max abs mean: {G_mean.abs().max().item():.6f}, Max std dev from 1: {(G_std - 1).abs().max().item():.6f}")
 
 
-    plt.figure()
-    model.plot_initial_params()
-    plt.savefig(os.path.join(plot_dir, 'initial_params.png'))
-    plt.close()
+     
 
-    
-    plt.figure()
-    model.visualize_initialization()
-    plt.savefig(os.path.join(plot_dir, 'initialization.png'))
-    plt.close()
-    
     # Train model
-    history = model.fit(E_100k, num_epochs=1, learning_rate=1e-4, lambda_reg=1e-2)
+    history = model.fit(E_100k, num_epochs=2, learning_rate=1e-4, lambda_reg=1e-2)
     logging.info("Model training completed.")
     model_save_path = os.path.join(output_dir, 'model.pt')
     # Save model and results
@@ -303,7 +345,7 @@ def train_and_evaluate(start_index, end_index, work_dir):
         'prevalence_t': essentials['prevalence_t'],
         'logit_prevalence_t': model.logit_prev_t,
         'G': G_100k,
-        'E': E,
+        'E': E_100k,
         'indices': indices,
         'disease_names': disease_names,
         'hyperparameters': {
@@ -338,7 +380,7 @@ def plot_results(model, history, disease_names, plot_dir):
     ax2.grid(True)
     plt.tight_layout()
     plt.savefig(os.path.join(plot_dir, 'training_history.png'))
-    plt.close()
+    plt.close('all') 
 
     # Plot calibration
     plot_calibration(model, plot_dir)
@@ -348,11 +390,7 @@ def plot_results(model, history, disease_names, plot_dir):
     compare_disease_rankings(model, disease_names, plot_dir)
  
     
-    plt.figure()
-    model.visualize_initialization()
-    plt.savefig(os.path.join(plot_dir, 'final_initialization.png'))
-    plt.close()
-    
+
     plot_signature_temporal_patterns(model, disease_names, plot_dir, selected_signatures=[0,1,14,15,16,13,17])
 
 
