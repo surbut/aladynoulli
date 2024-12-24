@@ -104,6 +104,14 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
         gamma_init = torch.zeros((self.P, self.K))
         lambda_init = torch.zeros((self.N, self.K, self.T))
         phi_init = torch.zeros((self.K, self.D, self.T))
+
+          # Initialize phi first (will be identical across batches)
+        for k in range(self.K):
+            L_phi = torch.linalg.cholesky(self.K_phi[k])
+            for d in range(self.D):
+                mean_phi = self.logit_prev_t[d, :] + self.psi[k, d]
+                eps = L_phi @ torch.randn(self.T)
+                phi_init[k, d, :] = mean_phi + eps
         
         # Rest of initialization remains the same
         for k in range(self.K):
@@ -120,12 +128,13 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
             for i in range(self.N):
                 eps = L_k @ torch.randn(self.T)
                 lambda_init[i, k, :] = lambda_means[i] + eps
-            
+            """ 
             L_phi = torch.linalg.cholesky(self.K_phi[k])
             for d in range(self.D):
                 mean_phi = self.logit_prev_t[d, :] + self.psi[k, d]
                 eps = L_phi @ torch.randn(self.T)
                 phi_init[k, d, :] = mean_phi + eps
+            """
         
         self.gamma = nn.Parameter(gamma_init)
         self.lambda_ = nn.Parameter(lambda_init)

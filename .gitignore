@@ -11,3 +11,6 @@ saved_results/*
 pyScripts/results/*
 pyScripts/*.pt
 pyScripts/*.pt.zip
+pyScripts/*.png
+pyScripts/*.npy
+pyScripts/*.pt

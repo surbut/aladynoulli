@@ -260,8 +260,18 @@ def train_and_evaluate(start_index, end_index, work_dir):
     )
 
     # Initialize and train
+       ### did not run with the new initial, we used built in clusters from the model init with the 1/2 clustering appraohc. 
+    torch.manual_seed(42)
+    np.random.seed(42)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(42)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     
     model.initialize_params(true_psi=initial_psi)
+
+    initial_phi = model.phi.detach().clone()
+    
     model.clusters = initial_clusters
     clusters_match = np.array_equal(initial_clusters, model.clusters)
     print(f"\nClusters match exactly: {clusters_match}")  
@@ -333,13 +343,14 @@ def train_and_evaluate(start_index, end_index, work_dir):
      
 
     # Train model
-    history = model.fit(E_100k, num_epochs=2, learning_rate=1e-4, lambda_reg=1e-2)
+    history = model.fit(E_100k, num_epochs=1, learning_rate=1e-4, lambda_reg=1e-2)
     logging.info("Model training completed.")
     model_save_path = os.path.join(output_dir, 'model.pt')
     # Save model and results
     torch.save({
         'model_state_dict': model.state_dict(),
         'clusters': model.clusters,
+        'initial_phi': initial_phi, 
         'psi': model.psi,
         'Y': Y_100k,
         'prevalence_t': essentials['prevalence_t'],
