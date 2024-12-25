@@ -261,17 +261,18 @@ def train_and_evaluate(start_index, end_index, work_dir):
 
     # Initialize and train
        ### did not run with the new initial, we used built in clusters from the model init with the 1/2 clustering appraohc. 
-    torch.manual_seed(42)
-    np.random.seed(42)
+    torch.manual_seed(2)
+    np.random.seed(2)
     if torch.cuda.is_available():
-        torch.cuda.manual_seed(42)
+        torch.cuda.manual_seed(2)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     
     model.initialize_params(true_psi=initial_psi)
 
     initial_phi = model.phi.detach().clone()
-    
+    print(initial_phi[1,2,:])
+    print(initial_phi[2,4,:])
     model.clusters = initial_clusters
     clusters_match = np.array_equal(initial_clusters, model.clusters)
     print(f"\nClusters match exactly: {clusters_match}")  
