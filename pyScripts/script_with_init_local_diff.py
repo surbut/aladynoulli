@@ -261,7 +261,7 @@ def train_and_evaluate(start_index, end_index, work_dir):
 
 
     # Initialize and train
-       ### did not run with the new initial, we used built in clusters from the model init with the 1/2 clustering appraohc. 
+    ### did not run with the new initial, we used built in clusters from the model init with the 1/2 clustering appraohc. 
     torch.manual_seed(2)
     np.random.seed(2)
     if torch.cuda.is_available():
@@ -346,7 +346,7 @@ def train_and_evaluate(start_index, end_index, work_dir):
      
 
     # Train model
-    history = model.fit(E_100k, num_epochs=1, learning_rate=1e-4, lambda_reg=1e-2)
+    history = model.fit(E_100k, num_epochs=300, learning_rate=1e-3, lambda_reg=1e-2)
     logging.info("Model training completed.")
     model_save_path = os.path.join(output_dir, 'model.pt')
     # Save model and results
