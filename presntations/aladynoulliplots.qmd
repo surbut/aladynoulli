@@ -24,6 +24,26 @@ use_condaenv("r-tensornoulli")
 # 4. Verify installation
 py_config()  # Should show your new environment
 
+conda_install("r-tensornoulli", packages = c("torch", "torchvision"))
+# Use your conda environment
+use_condaenv("r-tensornoulli")
+library(reticulate)
+
+# First, make sure we're using the right environment
+use_condaenv("r-tensornoulli")
+
+# Install PyTorch using pip
+py_install("torch", pip = TRUE)
+
+
+# Load the PyTorch model
+model_path <- "~/Dropbox (Personal)/mgbbtopic/model.pt"
+model_data <- torch$load(model_path)
+
+
+
+
+
 # Load the saved model data
 model_data <- py_load_object("~/Dropbox (Personal)//aladyn_model_full.pkl")
 lambda=model_data$lambda
