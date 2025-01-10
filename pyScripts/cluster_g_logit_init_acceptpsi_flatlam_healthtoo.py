@@ -15,7 +15,7 @@ from scipy.special import softmax
 import seaborn as sns
 
 class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
-    def __init__(self, N, D, T, K, P, G, Y, prevalence_t, signature_references, healthy_reference=None, disease_names=None):
+    def __init__(self, N, D, T, K, P, G, Y, prevalence_t, signature_references=None, healthy_reference=None, disease_names=None,flat_lambda=False):
         super().__init__()
         self.N = N
         self.D = D
@@ -27,8 +27,20 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
         self.psi = None 
         self.disease_names = disease_names
         self.jitter = 1e-6
-
-        self.signature_refs = torch.tensor(signature_references, dtype=torch.float32)
+        # Store whether to use flat lambda
+        self.flat_lambda = flat_lambda
+        
+        # If using flat lambda, modify signature references
+        
+    # Handle signature references
+        if flat_lambda:
+            self.signature_refs = torch.zeros(K)
+            self.genetic_scale=1    # Zeros instead of ones
+        else:
+            if signature_references is None:
+                raise ValueError("signature_references must be provided when flat_lambda=False")
+            self.signature_refs = torch.tensor(signature_references, dtype=torch.float32)
+            self.genetic_scale = 3.0 
         if healthy_reference is not None:
             self.healthy_ref = torch.tensor(healthy_reference, dtype=torch.float32)
         else:
@@ -51,6 +63,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
         # Fixed kernel parameters
         self.lambda_length_scale = T/4
         self.phi_length_scale = T/3
+         
         self.amplitude = 1
         self.lambda_amp=1
 
@@ -128,7 +141,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
             cluster_diseases = (self.clusters == k)
             base_value = Y_avg[:, cluster_diseases].mean(dim=1)
             gamma_init[:, k] = torch.linalg.lstsq(self.G, base_value.unsqueeze(1)).solution.squeeze()
-            lambda_means = self.G @ gamma_init[:, k]
+            lambda_means = self.genetic_scale * (self.G @ gamma_init[:, k])
             L_k = torch.linalg.cholesky(self.K_lambda)
             for i in range(self.N):
                 eps = L_k @ torch.randn(self.T)
@@ -253,7 +266,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
             if k == self.K and self.healthy_ref is not None:  # Healthy state
                 mean_lambda_k = self.healthy_ref.unsqueeze(0) 
             else:  # Disease signatures
-                mean_lambda_k = self.signature_refs[k].unsqueeze(0) + (self.G @ self.gamma[:, k]).unsqueeze(1)
+                mean_lambda_k = self.signature_refs[k].unsqueeze(0) + self.genetic_scale * (self.G @ self.gamma[:, k]).unsqueeze(1)
             
             deviations_lambda = lambda_k - mean_lambda_k
             for i in range(self.N):
@@ -301,7 +314,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
 
 
     def fit(self, event_times, num_epochs=1000, learning_rate=1e-4, lambda_reg=1e-2,
-        convergence_threshold=1e-3, patience=10):
+        convergence_threshold=1e-3, patience=20):
         """
         Fit model with early stopping and parameter monitoring
         
@@ -1330,3 +1343,23 @@ def plot_synthetic_components(data, num_samples=5):
     plt.tight_layout()
     plt.show()
 
+def calculate_calibration_stats(model, Y):
+    """Calculate calibration stats for a model"""
+    with torch.no_grad():
+        predicted = model.forward()
+        pi_pred = predicted[0] if isinstance(predicted, tuple) else predicted
+        pi_pred = pi_pred.cpu().detach().numpy()
+        Y_np = Y.cpu().detach().numpy() if torch.is_tensor(Y) else Y
+        
+        # Convert to numpy and calculate means
+        observed_risk = Y_np.mean(axis=0).flatten()
+        predicted_risk = pi_pred.mean(axis=0).flatten()
+        
+        scale_factor = np.mean(observed_risk) / np.mean(predicted_risk)
+        calibrated_risk = predicted_risk * scale_factor
+        
+        ss_res = np.sum((observed_risk - calibrated_risk) ** 2)
+        ss_tot = np.sum((observed_risk - np.mean(observed_risk)) ** 2)
+        r2 = 1 - (ss_res / ss_tot)
+        
+        return r2, scale_factor, observed_risk, predicted_risk, calibrated_risk
