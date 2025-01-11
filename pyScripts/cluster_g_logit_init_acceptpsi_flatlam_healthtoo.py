@@ -35,7 +35,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
     # Handle signature references
         if flat_lambda:
             self.signature_refs = torch.zeros(K)
-            self.genetic_scale=1    # Zeros instead of ones
+            self.genetic_scale=genetic_scale   # 
         else:
             if signature_references is None:
                 raise ValueError("signature_references must be provided when flat_lambda=False")
@@ -161,12 +161,8 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
             L_k = torch.linalg.cholesky(self.K_lambda)
             for i in range(self.N):
                 eps = L_k @ torch.randn(self.T)
-                lambda_init[i, k, :] = self.signature_refs[k] + lambda_means[i] + eps*0.01
+                lambda_init[i, k, :] = self.signature_refs[k] + lambda_means[i] + eps*0.1
    
-   
-   
-   
-
         if self.healthy_ref is not None:
             L_phi = torch.linalg.cholesky(self.K_phi)
             for d in range(self.D):
@@ -177,9 +173,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
             L_k = torch.linalg.cholesky(self.K_lambda)
             for i in range(self.N):
                 eps = L_k @ torch.randn(self.T)
-                lambda_init[i, self.K, :] = self.healthy_ref + eps*0.01
-   
-   
+                lambda_init[i, self.K, :] = self.healthy_ref + eps*0.1
             gamma_init[:, self.K] = 0.0
 
         self.gamma = nn.Parameter(gamma_init)
