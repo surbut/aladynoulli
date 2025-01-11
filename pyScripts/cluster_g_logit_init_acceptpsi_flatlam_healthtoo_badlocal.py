@@ -15,7 +15,7 @@ from scipy.special import softmax
 import seaborn as sns
 
 class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
-    def __init__(self, N, D, T, K, P, G, Y, prevalence_t,init_var_scaler, genetic_scale,signature_references=None, healthy_reference=None, disease_names=None,flat_lambda=False):
+    def __init__(self, N, D, T, K, P, G, Y, prevalence_t, signature_references=None, healthy_reference=None, disease_names=None,flat_lambda=False):
         super().__init__()
         self.N = N
         self.D = D
@@ -29,7 +29,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
         self.jitter = 1e-6
         # Store whether to use flat lambda
         self.flat_lambda = flat_lambda
-        self.init_var_scaler=init_var_scaler
+        
         # If using flat lambda, modify signature references
         
     # Handle signature references
@@ -40,7 +40,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
             if signature_references is None:
                 raise ValueError("signature_references must be provided when flat_lambda=False")
             self.signature_refs = torch.tensor(signature_references, dtype=torch.float32)
-            self.genetic_scale = genetic_scale
+            self.genetic_scale = 1.0 
         if healthy_reference is not None:
             self.healthy_ref = torch.tensor(healthy_reference, dtype=torch.float32)
         else:
@@ -134,52 +134,49 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
             for d in range(self.D):
                 mean_phi = self.logit_prev_t[d, :] + psi_init[k, d]
                 eps = L_phi @ torch.randn(self.T)
-                phi_init[k, d, :] = mean_phi + eps*self.init_var_scaler
-   
+                phi_init[k, d, :] = mean_phi + eps
 
         # Initialize lambda and gamma for disease clusters
         for k in range(self.K):
-            print(f"\nCalculating gamma for k={k}:")
-            if true_psi is None:
-                cluster_diseases = (self.clusters == k)
-                base_value = Y_avg[:, cluster_diseases].mean(dim=1)
-                base_value_centered = base_value - base_value.mean()
-                print(f"Number of diseases in cluster: {cluster_diseases.sum()}")
-            else:
-                # Use diseases with strong psi values for this signature
-                strong_diseases = (true_psi[k] > 0).float()
-                base_value = Y_avg[:, strong_diseases > 0].mean(dim=1)
-                base_value_centered = base_value - base_value.mean()
-                print(f"Number of diseases in cluster: {strong_diseases.sum()}")
-            print(f"Base value (first 5): {base_value[:5]}")
-            print(f"Base value centered (first 5): {base_value_centered[:5]}")
-            print(f"Base value centered mean: {base_value_centered.mean()}")
-  
-            gamma_init[:, k] = torch.linalg.lstsq(self.G, base_value_centered.unsqueeze(1)).solution.squeeze()
-            print(f"Gamma init for k={k} (first 5): {gamma_init[:5, k]}")
+            cluster_mask = (self.clusters == k)
+            ''' 
+            base_value = Y_avg[:, cluster_diseases].mean(dim=1)
+            gamma_init[:, k] = torch.linalg.lstsq(self.G, base_value.unsqueeze(1)).solution.squeeze()
             lambda_means = self.genetic_scale * (self.G @ gamma_init[:, k])
             L_k = torch.linalg.cholesky(self.K_lambda)
             for i in range(self.N):
                 eps = L_k @ torch.randn(self.T)
                 lambda_init[i, k, :] = self.signature_refs[k] + lambda_means[i] + eps*0.01
-   
-   
-   
-   
+            '''
+            # New proposed approach:
+            # Calculate log proportions for all individuals
+            indiv_prop_logs = torch.zeros(self.N)
+            for i in range(self.N):
+                Y_counts_i = self.Y[i].sum(dim=0)  # T vec
+                total_counts_i = Y_counts_i.sum() + 1e-8
+                # Get proportion of their diagnoses from signature k
+                indiv_signature_props = self.Y[i, cluster_mask].sum(dim=0) / total_counts_i
+                indiv_prop_avg = indiv_signature_props.mean()
+                indiv_prop_logs[i] = torch.log(indiv_prop_avg + epsilon)
+
+            gamma_init[:, k] = torch.linalg.lstsq(self.G, (indiv_prop_logs - self.signature_refs[k].mean()).unsqueeze(1)).solution.squeeze()
+            lambda_means = self.genetic_scale * (self.G @ gamma_init[:, k])
+            L_k = torch.linalg.cholesky(self.K_lambda)
+            for i in range(self.N):
+                eps = L_k @ torch.randn(self.T)
+                lambda_init[i, k, :] = self.signature_refs[k] + lambda_means[i] + eps*0.01
 
         if self.healthy_ref is not None:
             L_phi = torch.linalg.cholesky(self.K_phi)
             for d in range(self.D):
                 mean_phi = self.logit_prev_t[d, :] + psi_init[self.K, d]
                 eps = L_phi @ torch.randn(self.T)
-                phi_init[self.K, d, :] = mean_phi + eps*self.init_var_scaler
+                phi_init[self.K, d, :] = mean_phi + eps
 
             L_k = torch.linalg.cholesky(self.K_lambda)
             for i in range(self.N):
                 eps = L_k @ torch.randn(self.T)
                 lambda_init[i, self.K, :] = self.healthy_ref + eps*0.01
-   
-   
             gamma_init[:, self.K] = 0.0
 
         self.gamma = nn.Parameter(gamma_init)
@@ -336,7 +333,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
 
 
     def fit(self, event_times, num_epochs=1000, learning_rate=1e-4, lambda_reg=1e-2,
-        convergence_threshold=1e-3, patience=20,warmup_epochs=10):
+        convergence_threshold=1e-3, patience=20):
         """
         Fit model with early stopping and parameter monitoring
         
@@ -347,7 +344,6 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
         """
 
             # Create optimizer with consistent learning rates
-        initial_lr = learning_rate / 100 
         optimizer = optim.Adam([
             {'params': [self.lambda_, self.phi], 'lr': learning_rate},
             {'params': [self.psi], 'lr': learning_rate},  # Same base learning rate
@@ -366,19 +362,10 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
         best_loss = float('inf')
         patience_counter = 0
         prev_loss = float('inf')
-
-        
         
         print("Starting training...")
         
         for epoch in range(num_epochs):
-
-            if epoch < warmup_epochs:
-                current_lr = initial_lr + (learning_rate - initial_lr) * (epoch / warmup_epochs)
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] = current_lr
-            
-            
             optimizer.zero_grad()
             
             # Compute loss and backprop
@@ -1395,35 +1382,3 @@ def calculate_calibration_stats(model, Y):
         r2 = 1 - (ss_res / ss_tot)
         
         return r2, scale_factor, observed_risk, predicted_risk, calibrated_risk
-
-def subset_data(Y, E, G, n_samples=50000, seed=42):
-    """
-    Subset the data to n_samples individuals while maintaining consistency
-    
-    Args:
-        Y: tensor of shape [N, D, T]
-        E: tensor of shape [N, D]
-        G: tensor of shape [N, P]
-        n_samples: number of individuals to keep
-        seed: random seed for reproducibility
-    
-    Returns:
-        Y_sub, E_sub, G_sub: subsetted tensors
-    """
-    torch.manual_seed(seed)
-    
-    # Get total number of individuals
-    N = Y.shape[0]
-    
-    # Randomly select n_samples indices
-    indices = torch.randperm(N)[:n_samples]
-    
-    # Subset all matrices using the same indices
-    Y_sub = Y[indices]
-    E_sub = E[indices]
-    G_sub = G[indices]
-    
-    print(f"Original shapes: Y={Y.shape}, E={E.shape}, G={G.shape}")
-    print(f"New shapes: Y={Y_sub.shape}, E={E_sub.shape}, G={G_sub.shape}")
-    
-    return Y_sub, E_sub, G_sub, indices
