@@ -42,7 +42,7 @@ class AladynSurvivalFixedKernelsAvgLoss_clust_logitInit_psitest(nn.Module):
             self.signature_refs = torch.tensor(signature_references, dtype=torch.float32)
             self.genetic_scale = genetic_scale
         if healthy_reference is not None:
-            self.healthy_ref = torch.tensor(healthy_reference, dtype=torch.float32)
+            self.healthy_ref = torch.tensor(-5.0, dtype=torch.float32)
         else:
             self.healthy_ref = None
         # Convert inputs to tensors
